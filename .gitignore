@@ -1,0 +1,29 @@
+# 构建产物
+build/
+dist/
+*.spec
+!*.spec.example
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 打包 / 安装测试临时目录
+_sandbox/
+_test/
+*.log
+
+# 运行时与本地状态
+win_glass.log
+*.json.tmp
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+nul
+
+# 发布用大二进制（走 Release 附件，不入库）
+*.exe
+*.zip
+*.7z
