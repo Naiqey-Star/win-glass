@@ -471,4 +471,4 @@ win-glass/
 
 ---
 
-<sub>作者：月见八千代 (Yachiyo) · 用纯 `ctypes` 手工对接 Win32 的一次尝试</sub>
+<sub>作者：Naiqey </sub>
