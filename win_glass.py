@@ -91,7 +91,7 @@ DEFAULT_LOG = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser(
                            "win_glass", "win_glass.log")
 DEFAULT_CFG = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"),
                            "win_glass", "config.json")
-APP_VER = "1.5.0"
+APP_VER = "1.6.0"
 LOG_PATH = DEFAULT_LOG
 CFG_PATH = DEFAULT_CFG
 _IO_LOG_FH = None          # 当前接管的日志文件句柄（用于 --log 覆盖时重开）
@@ -205,6 +205,7 @@ LWA_ALPHA = 0x00000002
 # 杂项
 GA_ROOT = 2
 GW_OWNER = 4
+GW_HWNDNEXT = 2          # GetWindow：同层的下一个窗口（沿它走就是 Z 序往下一层）
 MONITOR_DEFAULTTONEAREST = 2
 DWMWA_CLOAKED = 14
 WM_QUIT = 0x0012
@@ -230,6 +231,20 @@ DEFAULT_HOVER_INTERVAL = 0.05
 # 全屏窗口的目标透明度写死这个值，**不读 active_pct**：
 # 用户调「聚焦最高透明度」是为了看清背景，不是为了压暗全屏视频/游戏。
 FULLSCREEN_ALPHA = 1.0
+
+# ---- 层叠衰减（v1.6.0）----
+# 普通非聚焦窗口按**它在这个堆叠栈里的位置**递减：
+#   第 1 层（栈里最靠上的普通非聚焦窗口）= inactive_pct
+#   之后每层 = 上一层**已取整的显示值** × LAYER_DECAY_RATIO，四舍五入
+#   低于 LAYER_MIN_PCT 就直接封底
+# 「视作聚焦」的窗口（最大化 / 置顶）和全屏窗口**不参与层级编号** ——
+# 它们各自有更高的优先级，不会因为排在下面而被压暗。
+LAYER_DECAY_MIN, LAYER_DECAY_MAX = 0.10, 1.00
+DEFAULT_LAYER_DECAY = 0.70
+# 和悬停系数一样：滑块是整数档，1 档 = 0.1 ⇒ 范围 1~10。
+LAYER_DECAY_UNITS = 10
+# 逐层递推的透明度下限（%）。算到就等于它，再往下不再继续乘。
+LAYER_MIN_PCT = 5
 
 # WinEvent
 EVENT_SYSTEM_FOREGROUND = 0x0003
@@ -297,6 +312,10 @@ CMD_HOVER = 13
 CMD_FULLSCREEN = 14
 # 「悬停插值系数」：owner-draw 滑块，0.0~1.0、0.1 一档（v1.5.0）
 CMD_SLIDE_HOVER = 15
+# 「层叠衰减」：勾选式开关，按窗口在堆叠栈里的位置逐层递减（v1.6.0）
+CMD_LAYER = 16
+# 「层衰减系数」：owner-draw 滑块，0.1~1.0、0.1 一档（v1.6.0）
+CMD_SLIDE_DECAY = 17
 
 # 滑块外观：整条菜单的宽度由最宽的 owner-draw 项决定。
 # 观感对齐 **Windows 任务栏音量条**：细轨道 + 强调色填充 + 圆形手柄。
@@ -470,6 +489,13 @@ user32.GetUpdateRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT), wt.BOOL]
 user32.GetUpdateRect.restype = wt.BOOL
 user32.GetClassNameW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
 user32.GetClassNameW.restype = ctypes.c_int
+# ⚠️ Z 序遍历（v1.6.0 层叠衰减）要用这两个，**必须声明 argtypes** ——
+# 不声明时 64 位 HWND 会被当 c_int 截断，返回的句柄值错了也不报错，
+# 只是静默地走不到底 / 认错窗口（和 IsZoomed 那次是同一类坑）。
+user32.GetTopWindow.argtypes = [wt.HWND]
+user32.GetTopWindow.restype = wt.HWND
+user32.GetWindow.argtypes = [wt.HWND, wt.UINT]
+user32.GetWindow.restype = wt.HWND
 
 
 def _win_class(hwnd) -> str:
@@ -824,13 +850,19 @@ class GlassConfig:
     HOVER_RATIO_UNITS = HOVER_RATIO_UNITS              # 见模块顶部常量
     # 全屏窗口默认「接管并锁定 100%」——见模块顶部「全屏窗口（v1.4.0）」说明
     DEFAULT_FULLSCREEN_LOCK = True
+    # 层叠衰减（v1.6.0）：普通非聚焦窗口按堆叠层级递减 —— 见模块顶部常量块。
+    DEFAULT_LAYER_DECAY_ON = True
+    DEFAULT_LAYER_DECAY = DEFAULT_LAYER_DECAY          # 见模块顶部常量
+    # 层衰减系数滑块的档位数（1 档 = 0.1 ⇒ 1~10 即 0.1~1.0）
+    LAYER_DECAY_UNITS = LAYER_DECAY_UNITS              # 见模块顶部常量
 
     def __init__(self, inactive_alpha=0.40, active_alpha=1.00, fade_ms=500, fps=60,
                  scan_interval=0.15, rescan_interval=0.50,
                  fullscreen_lock=None, skip_foreign_layered=False,
                  extra_exclude=(), verbose=False, restore_on_exit=True,
                  tray=True, log_path="", cfg_path=None,
-                 hover=None, hover_ratio=None, hover_interval=None):
+                 hover=None, hover_ratio=None, hover_interval=None,
+                 layer_decay=None, layer_decay_ratio=None):
         # cfg_path=None → 用默认路径；cfg_path="" → 明确关闭持久化
         self.cfg_path = CFG_PATH if cfg_path is None else cfg_path
         # None 视为「没指定」，落到内置默认；否则 _to_pct(None) 会直接 TypeError
@@ -861,6 +893,12 @@ class GlassConfig:
                             else hover_ratio)
         self.hover_interval = (DEFAULT_HOVER_INTERVAL if hover_interval is None
                                else hover_interval)
+        # 层叠衰减：None 一律回落到内置默认（首次运行 / --no-config 都要能用）
+        self.layer_decay = (self.DEFAULT_LAYER_DECAY_ON if layer_decay is None
+                            else bool(layer_decay))
+        self.layer_decay_ratio = (self.DEFAULT_LAYER_DECAY
+                                  if layer_decay_ratio is None
+                                  else layer_decay_ratio)
 
     # ---- 非聚焦最低透明度（5~95%）----
     @property
@@ -975,6 +1013,40 @@ class GlassConfig:
         """全屏窗口的目标透明度：**恒定 100%，不读 active_pct**。"""
         return FULLSCREEN_ALPHA
 
+    # ---- 层叠衰减（v1.6.0）----
+    @property
+    def layer_decay(self) -> bool:
+        """True = 普通非聚焦窗口按堆叠层级逐层递减（默认开）。
+
+        False = v1.5.0 及以前的行为：所有普通非聚焦窗口统一 inactive_pct。
+        注意参与递减的**只有**普通非聚焦窗口 —— 聚焦 / 最大化 / 置顶 / 全屏
+        各有更高优先级，不占层级号。
+        """
+        return self._layer_decay
+
+    @layer_decay.setter
+    def layer_decay(self, v):
+        self._layer_decay = bool(v)
+
+    @property
+    def layer_decay_ratio(self) -> float:
+        """层衰减系数：每一层 = 上一层（已取整的显示值）× 它。
+
+        夹到 [0.1, 1.0]：上限 1.0 = 完全不衰减（所有层同值），
+        下限 0.1 而不是 0 —— 0 会让第 2 层直接砸到下限，链条失去意义。
+        """
+        return self._layer_decay_ratio
+
+    @layer_decay_ratio.setter
+    def layer_decay_ratio(self, v):
+        self._layer_decay_ratio = max(LAYER_DECAY_MIN,
+                                      min(LAYER_DECAY_MAX, float(v)))
+
+    def layer_alpha(self, depth: int) -> float:
+        """第 depth 层「普通非聚焦」窗口的目标透明度（0..1）。"""
+        return layer_pct(self._inactive_pct, depth,
+                         self._layer_decay_ratio) / 100.0
+
     # ---- 持久化 ----
     def as_dict(self) -> dict:
         return {"version": 1,
@@ -983,7 +1055,9 @@ class GlassConfig:
                 "fade_ms": self._fade_ms,
                 "hover_enabled": bool(self._hover),
                 "hover_ratio": round(float(self._hover_ratio), 3),
-                "fullscreen_lock": bool(self._fullscreen_lock)}
+                "fullscreen_lock": bool(self._fullscreen_lock),
+                "layer_decay": bool(self._layer_decay),
+                "layer_decay_ratio": round(float(self._layer_decay_ratio), 3)}
 
     def save(self) -> bool:
         return save_cfg_file(self.as_dict(), self.cfg_path)
@@ -1042,6 +1116,21 @@ class GlassConfig:
             return bool(fullscreen_lock)
         v = (saved or {}).get("fullscreen_lock", None)
         return None if v is None else bool(v)
+
+    @classmethod
+    def apply_saved_layer(cls, saved: dict, layer_decay, layer_decay_ratio):
+        """层叠衰减开关与系数：命令行 > 配置文件 > 内置默认。
+
+        返回 (layer_decay, layer_decay_ratio)；和 apply_saved_hover 一样单独一个
+        classmethod，避免动到 apply_saved 的二元组契约。
+        """
+        if layer_decay is None:
+            v = (saved or {}).get("layer_decay", cls.DEFAULT_LAYER_DECAY_ON)
+            layer_decay = cls.DEFAULT_LAYER_DECAY_ON if v is None else bool(v)
+        if layer_decay_ratio is None:
+            layer_decay_ratio = (saved or {}).get("layer_decay_ratio",
+                                                  cls.DEFAULT_LAYER_DECAY)
+        return layer_decay, layer_decay_ratio
 
 
 # --------------------------------------------------------------------------
@@ -1156,9 +1245,86 @@ def cursor_root_window() -> int:
     return _h(user32.GetAncestor(hwnd, GA_ROOT)) or hwnd
 
 
+def round_half_up(x: float) -> int:
+    """四舍五入取整。
+
+    ⚠️ 不能用内建 round()：它是**银行家舍入**（round(24.5) == 24），
+    而层叠衰减明确要求四舍五入 —— 24.5 必须是 25，否则用户按
+    「50 → 35 → 25」心算就对不上了。
+    """
+    return int(x + 0.5) if x >= 0 else -int(-x + 0.5)
+
+
+def layer_pct(base_pct: int, depth: int, ratio: float,
+              floor_pct: int = LAYER_MIN_PCT) -> int:
+    """第 depth 层「普通非聚焦」窗口的不透明度（%，整数）。
+
+    输入
+      base_pct  : 第 1 层的值，即 cfg.inactive_pct（非聚焦设定值）
+      depth     : 层级，**从 1 开始**（1 = 堆叠栈里最靠上的普通非聚焦窗口）
+      ratio     : 层衰减系数（0.1~1.0），默认 0.70
+      floor_pct : 下限，默认 LAYER_MIN_PCT(5)
+
+    递推
+      depth = 1 → base_pct
+      depth = n → round_half_up(第 n-1 层的**已取整显示值** × ratio)
+
+    ⚠️ 用「已取整的上一层」而不是 base × ratio^(n-1)：这样每一层的数字都能
+    拿屏幕上看到的上一层直接心算验证（25% × 0.7 = 17.5 → 18%）。
+    代价是舍入误差顺着层数累加 —— 这是**有意**的取舍：链内自洽、肉眼可验，
+    比「绝对精确但和屏幕对不上」更符合这个工具的定位。
+
+    例（base=50, ratio=0.7）：
+      第1层 50 · 第2层 35 · 第3层 25(24.5→25) · 第4层 18(17.5→18)
+      · 第5层 13(12.6→13) · 第6层 9 · 第7层 6 · 第8层起 5（封底）
+    """
+    v = max(int(base_pct), int(floor_pct))
+    n = int(depth)
+    if n <= 1:
+        return v
+    for _ in range(n - 1):
+        if v <= floor_pct:
+            break               # 已经封底，不必再乘（结果不会变）
+        v = round_half_up(v * ratio)
+    return max(v, int(floor_pct))
+
+
+def z_order_windows(limit: int = 4000):
+    """按 **Z 序从上到下**列出顶层窗口（最顶的在前），不做任何过滤。
+
+    EnumWindows 的回调顺序其实也是 Z 序，但要跑完整回调；层叠衰减每一轮
+    都要拿一次顺序，所以用 GetTopWindow + GW_HWNDNEXT 这条链只读顺序，
+    开销更低（一次 GetWindow / 窗口）。
+
+    limit 是防呆上限：万一窗口链被某个驱动弄成环，不至于把主循环挂死。
+    """
+    out = []
+    h = user32.GetTopWindow(None)
+    while h and len(out) < limit:
+        out.append(_h(h))
+        h = user32.GetWindow(h, GW_HWNDNEXT)
+    return out
+
+
+def assign_depths(z_order, participants):
+    """给「参与层叠编号的窗口」按 Z 序编号，返回 {hwnd: depth}，depth 从 1 起。
+
+    participants 只应包含**普通非聚焦窗口**：聚焦 / 最大化 / 置顶 / 全屏
+    各有更高的优先级，既不占层级号，也不会把后面的窗口挤下一层。
+    结果完全由 z_order 决定 ⇒ 同一个 z_order 必得同一个结果（纯函数，可测）。
+    """
+    depths = {}
+    d = 0
+    for h in z_order:
+        if h in participants:
+            d += 1
+            depths[h] = d
+    return depths
+
+
 def target_for(cfg: "GlassConfig", hwnd: int, *, is_fg: bool = False,
                top: bool = False, zoomed: bool = False, fullscreen: bool = False,
-               hover_hwnd: int = 0):
+               hover_hwnd: int = 0, depth: int = 0):
     """唯一的「目标透明度判定」出口。返回 (目标不透明度, 理由, 是否悬停中)。
 
     放在模块级、而不是 GlassEngine 的方法，是为了让 `--list` 体检打印的结果
@@ -1175,7 +1341,10 @@ def target_for(cfg: "GlassConfig", hwnd: int, *, is_fg: bool = False,
                       之上，压暗它反而更看不清）
       ⑤ 悬停窗口   —— 插值点值（最低 + (最高−最低) × hover_ratio），
                       **只对"本应被压暗"的窗口生效**
-      ⑥ 其余       —— inactive_pct
+      ⑥ 普通非聚焦 —— **层叠衰减**（v1.6.0，`cfg.layer_decay` 默认开）：
+                      depth=1 用 inactive_pct，depth=n 用
+                      round_half_up(上一层已取整显示值 × cfg.layer_decay_ratio)，
+                      下限 LAYER_MIN_PCT(5%)。关掉就退回「统一 inactive_pct」。
 
     ②③④ 属于同一组、⑤ 属于另一组：悬停只在"基础目标 = 最低值"的窗口上生效。
     全屏/聚焦/最大化/置顶当前都是（或应当是）最高透明度，按插值算只会把它们
@@ -1195,6 +1364,9 @@ def target_for(cfg: "GlassConfig", hwnd: int, *, is_fg: bool = False,
         return cfg.active_alpha, "置顶", False
     if cfg.hover and hover_hwnd and hover_hwnd == hwnd:
         return cfg.hover_alpha, "悬停", True
+    if cfg.layer_decay and depth >= 1:
+        pct = layer_pct(cfg.inactive_pct, depth, cfg.layer_decay_ratio)
+        return pct / 100.0, "第%d层" % depth, False
     return cfg.inactive_alpha, "未聚焦", False
 
 
@@ -1890,6 +2062,16 @@ class TrayIcon:
                            "全屏窗口固定 100%（不受最高值设置影响）"
                            if cfg.fullscreen_lock else
                            "全屏窗口固定 100%（当前：完全不接管全屏）")
+        # 层叠衰减（v1.6.0）：勾选时把前几层的**实际算出来的值**直接写进菜单
+        # 文字 —— 省得用户自己去心算「50% × 0.7 × 0.7 是多少」。
+        if cfg.layer_decay:
+            _layer_text = "层叠衰减（普通非聚焦逐层：%s…）" % " / ".join(
+                "%d%%" % layer_pct(cfg.inactive_pct, d, cfg.layer_decay_ratio)
+                for d in range(1, 4))
+        else:
+            _layer_text = "层叠衰减（当前：关，所有非聚焦统一 %d%%）" % cfg.inactive_pct
+        user32.AppendMenuW(m, MF_STRING | (MF_CHECKED if cfg.layer_decay else 0),
+                           CMD_LAYER, _layer_text)
         user32.AppendMenuW(m, MF_SEPARATOR, 0, None)
         self._append_sliders(m)
         user32.AppendMenuW(m, MF_SEPARATOR, 0, None)
@@ -1931,7 +2113,7 @@ class TrayIcon:
 
     # ---------------- 滑块：建项 / 测量 / 绘制 ----------------
     def _append_sliders(self, m):
-        """把三个滑块作为 owner-draw 菜单项插进菜单。"""
+        """把四个滑块作为 owner-draw 菜单项插进菜单。"""
         cfg = self.engine.cfg
         sliders = [
             MenuSlider(CMD_SLIDE_INACTIVE, "非聚焦最低透明度",
@@ -1951,6 +2133,17 @@ class TrayIcon:
                            self.engine.cfg.hover_ratio * cfg.HOVER_RATIO_UNITS)),
                        lambda v: self.engine.set_hover_ratio(
                            v / float(cfg.HOVER_RATIO_UNITS)),
+                       fmt_ratio_units),
+            # 层衰减系数（v1.6.0）：同样是内部 0~10 档、显示成 0.0~1.0。
+            # 普通非聚焦窗口每往下一层就乘一次它，拖动时上面那行
+            # 「层叠衰减（第 1 层 xx%，之后每层 ×0.7，下限 5%）」会立刻跟着变。
+            MenuSlider(CMD_SLIDE_DECAY, "层衰减系数",
+                       0, cfg.LAYER_DECAY_UNITS,
+                       lambda: int(round(
+                           self.engine.cfg.layer_decay_ratio
+                           * cfg.LAYER_DECAY_UNITS)),
+                       lambda v: self.engine.set_layer_decay_ratio(
+                           v / float(cfg.LAYER_DECAY_UNITS)),
                        fmt_ratio_units),
         ]
         self._sliders = []
@@ -2219,7 +2412,8 @@ class TrayIcon:
                      self.msg_counts["draw"]))
 
     def _invoke(self, cid):
-        if cid in (CMD_SLIDE_INACTIVE, CMD_SLIDE_ACTIVE):
+        if cid in (CMD_SLIDE_INACTIVE, CMD_SLIDE_ACTIVE,
+                   CMD_SLIDE_HOVER, CMD_SLIDE_DECAY):
             return                       # 滑块靠钩子拖动，不走命令逻辑
         if cid == CMD_TOGGLE:
             self.engine.set_paused(not self.engine.paused)
@@ -2239,6 +2433,8 @@ class TrayIcon:
             self.engine.set_hover(not self.engine.cfg.hover)
         elif cid == CMD_FULLSCREEN:
             self.engine.set_fullscreen_lock(not self.engine.cfg.fullscreen_lock)
+        elif cid == CMD_LAYER:
+            self.engine.set_layer_decay(not self.engine.cfg.layer_decay)
         elif cid == CMD_FADE_MS:
             self._ask_fade_ms()
 
@@ -2366,6 +2562,37 @@ class GlassEngine:
         print("[win_glass] 全屏窗口：%s"
               % ("接管并固定在 100%（不受最高值设置影响）"
                  if self.cfg.fullscreen_lock else "完全不接管（原样保留）"))
+
+    def set_layer_decay(self, flag):
+        """开关「层叠衰减」（托盘菜单 / 测试用，v1.6.0）。
+
+        关掉 = 退回 v1.5.0 行为（所有普通非聚焦窗口统一 inactive_pct）。
+        不用手工重算：`_dirty` 会让下一轮 `_update_targets()` 重算全部目标值 ——
+        层级号、颜色、理由文本会一起更新。
+        """
+        with self.lock:
+            self.cfg.layer_decay = bool(flag)
+        self._dirty.set()
+        self.save_cfg(force=True)
+        print("[win_glass] 层叠衰减：%s"
+              % ("开（第 1 层 %d%%，之后每层 ×%.1f，下限 %d%%）"
+                 % (self.cfg.inactive_pct, self.cfg.layer_decay_ratio,
+                    LAYER_MIN_PCT)
+                 if self.cfg.layer_decay
+                 else "关（所有非聚焦窗口统一 %d%%）" % self.cfg.inactive_pct))
+
+    def set_layer_decay_ratio(self, ratio):
+        """改层衰减系数（0.1~1.0，默认 0.70）。"""
+        with self.lock:
+            self.cfg.layer_decay_ratio = ratio
+        self._dirty.set()
+        self.save_cfg(force=True)
+        if self.cfg.verbose:
+            print("[win_glass] 层衰减系数 %.2f → 第 1~4 层 %s"
+                  % (self.cfg.layer_decay_ratio,
+                     " / ".join("%d%%" % layer_pct(self.cfg.inactive_pct, d,
+                                                   self.cfg.layer_decay_ratio)
+                                for d in range(1, 5))))
 
     def save_cfg(self, force: bool = False):
         """写配置文件。拖动滑块时会频繁触发，所以节流到 0.3s 一次；
@@ -2541,10 +2768,38 @@ class GlassEngine:
                          "0x%X" % cand if cand else "无"))
 
     def _target_for(self, hwnd: int, *, is_fg=False, top=False, zoomed=False,
-                    fullscreen=False, hover_hwnd=0):
+                    fullscreen=False, hover_hwnd=0, depth=0):
         """见模块级 target_for()——这里只是把 cfg 填进去，保证两边同一份逻辑。"""
         return target_for(self.cfg, hwnd, is_fg=is_fg, top=top, zoomed=zoomed,
-                          fullscreen=fullscreen, hover_hwnd=hover_hwnd)
+                          fullscreen=fullscreen, hover_hwnd=hover_hwnd,
+                          depth=depth)
+
+    def _layer_depths(self, want):
+        """给 want 里的**普通非聚焦窗口**按 Z 序编号，返回 {hwnd: depth}。
+
+        只编号「普通非聚焦」：聚焦 / 最大化 / 置顶 / 全屏各有更高优先级，不占
+        层级号。尤其是**置顶窗口**——它物理上总在很靠上的位置，若让它占号会把
+        它下面所有窗口整体推低一层，而它自己又不参与递减 ⇒ 层级就没法解释了。
+
+        返回的字典只包含确实算普通非聚焦的窗口；调用方拿不到键就传 depth=0，
+        target_for 会走 active/inactive 分支。关掉层叠衰减时直接返回空字典。
+
+        ⚠️ 这里是**独立重读一遍**窗口状态（不复用 _update_targets 的结果），
+        所以只在"新窗口接管"这种低频路径上调用。
+        """
+        if not self.cfg.layer_decay:
+            return {}
+        fg = _h(user32.GetForegroundWindow())
+        plain = set()
+        for hwnd in want:
+            if hwnd == fg:
+                continue
+            top, zoomed, fs = read_window_state(hwnd)
+            if not (top or zoomed or fs):
+                plain.add(hwnd)
+        if not plain:
+            return {}
+        return assign_depths(z_order_windows(), plain)
 
     def _refresh_window_list(self):
         """全量枚举：发现新窗口、清理已消失的窗口。"""
@@ -2554,38 +2809,62 @@ class GlassEngine:
         # 逼 _poll_hover 下次重新判定，不然悬停状态会一直停在旧结论上。
         self._hover_cursor = None
         with self.lock:
-            for hwnd in alive:
-                if hwnd not in self.states:
-                    top, zoomed, fs = read_window_state(hwnd)
-                    tgt, _why, _hv = self._target_for(
-                        hwnd, is_fg=(hwnd == fg), top=top, zoomed=zoomed,
-                        fullscreen=fs, hover_hwnd=self._hover_hwnd)
-                    self._adopt(hwnd, tgt)
+            fresh = [h for h in alive if h not in self.states]
+            # 新窗口一开始就要落在它该有的层级上：否则会先按「未聚焦」接管、
+            # 下一轮再淡到层值，肉眼能看到一次多余的跳变。
+            depths = self._layer_depths(alive) if fresh else {}
+            for hwnd in fresh:
+                top, zoomed, fs = read_window_state(hwnd)
+                tgt, _why, _hv = self._target_for(
+                    hwnd, is_fg=(hwnd == fg), top=top, zoomed=zoomed,
+                    fullscreen=fs, hover_hwnd=self._hover_hwnd,
+                    depth=depths.get(hwnd, 0))
+                self._adopt(hwnd, tgt)
             for hwnd in list(self.states):
                 if hwnd not in alive:
                     st = self.states.pop(hwnd)
                     self._restore(st)
 
     def _update_targets(self):
-        """只读式重算目标（含全屏/最大化/置顶/悬停检测）。
+        """只读式重算目标（全屏/最大化/置顶/悬停检测 + 层叠层级编号）。
 
         每轮每个窗口多花 3 次 user32 调用（GetWindowRect + MonitorFromWindow +
-        GetMonitorInfoW）来判断全屏；默认 7 次/秒、窗口数十几，实测可忽略。
+        GetMonitorInfoW）判断全屏；层叠衰减再走一次 Z 序链（GetTopWindow +
+        每窗口一次 GetWindow）。默认 7 次/秒、窗口数十几，实测可忽略。
+
+        必须分两遍：**先把这一轮所有窗口的状态判定完**，才知道谁算「普通非
+        聚焦」，才能按 Z 序给它们编号；而编号又决定每个窗口的目标值 ——
+        一遍算不出来（先算的窗口不知道后面还有几个普通非聚焦排在它下面）。
         """
         if self.paused:
             return
         fg = _h(user32.GetForegroundWindow())
         with self.lock:
             hover_hwnd = self._hover_hwnd
+            # 第一遍：判定状态，顺便收集「普通非聚焦」（层叠编号的候选）
+            info = {}
+            plain = set()
             for hwnd, st in self.states.items():
                 if not user32.IsWindow(hwnd):
                     continue
                 top, zoomed, fs = read_window_state(hwnd, st)
                 is_fg = (hwnd == fg)
                 st.is_fg = is_fg
+                info[hwnd] = (is_fg, top, zoomed, fs)
+                if not (is_fg or top or zoomed or fs):
+                    plain.add(hwnd)
+            # 第二遍：按 Z 序编号（层叠关掉、或没有普通非聚焦窗口 → 空字典）
+            depths = (assign_depths(z_order_windows(), plain)
+                      if (self.cfg.layer_decay and plain) else {})
+            # 第三遍：算目标值
+            for hwnd, (is_fg, top, zoomed, fs) in info.items():
+                st = self.states.get(hwnd)
+                if st is None:
+                    continue        # 上面 _restore 掉的不再管
                 tgt, reason, hv = self._target_for(
                     hwnd, is_fg=is_fg, top=top, zoomed=zoomed,
-                    fullscreen=fs, hover_hwnd=hover_hwnd)
+                    fullscreen=fs, hover_hwnd=hover_hwnd,
+                    depth=depths.get(hwnd, 0))
                 st.hover = hv
                 self._set_target(st, tgt, reason)
 
@@ -2787,23 +3066,44 @@ def list_windows(cfg: GlassConfig):
     hover_hwnd = cursor_root_window() if cfg.hover else 0
     if hover_hwnd and hover_hwnd not in hwnds:
         hover_hwnd = 0
+    # 层叠编号：与引擎共用 assign_depths，保证 --list 打印的就是引擎
+    # 实际会算出来的层级（只统计「普通非聚焦」窗口）。
+    plain = set()
+    for hwnd in hwnds:
+        if hwnd == fg:
+            continue
+        _t, _z, _f = read_window_state(hwnd)
+        if not (_t or _z or _f):
+            plain.add(hwnd)
+    depths = (assign_depths(z_order_windows(), plain)
+              if (cfg.layer_decay and plain) else {})
     rows = []
     for hwnd in hwnds:
         top, zoomed, fs = read_window_state(hwnd)
         alpha, why, _hv = target_for(cfg, hwnd, is_fg=(hwnd == fg), top=top,
                                      zoomed=zoomed, fullscreen=fs,
-                                     hover_hwnd=hover_hwnd)
+                                     hover_hwnd=hover_hwnd,
+                                     depth=depths.get(hwnd, 0))
         flags = "".join(("F" if fs else "-", "Z" if zoomed else "-",
                          "T" if top else "-"))
         rows.append((hwnd, _class_name(hwnd), _window_text(hwnd),
-                     int(round(alpha * 100)), why, flags))
+                     int(round(alpha * 100)), why, flags,
+                     depths.get(hwnd, 0)))
     rows.sort(key=lambda r: (-r[3], r[1]))
     print(f"可管理窗口 {len(rows)} 个   未聚焦目标={cfg.inactive_pct}%   "
           f"聚焦/最大化/置顶目标={cfg.active_pct}%   全屏固定=100%   "
           f"渐隐={cfg.fade_ms}ms")
     print("判定优先级: 全屏(恒 100%，不受最高值设置影响) > 聚焦 > 最大化 > "
-          "置顶 > 悬停 > 未聚焦")
-    print("标记 F=全屏 Z=最大化 T=置顶")
+          "置顶 > 悬停 > 普通非聚焦(层叠衰减)")
+    print("标记 F=全屏 Z=最大化 T=置顶   层=层叠层级(1 起，0=不参与层叠)")
+    if cfg.layer_decay:
+        print("层叠衰减：开   第 1~5 层 = %s（系数 %.2f，下限 %d%%）"
+              % (" / ".join("%d%%" % layer_pct(cfg.inactive_pct, d,
+                                               cfg.layer_decay_ratio)
+                            for d in range(1, 6)),
+                 cfg.layer_decay_ratio, LAYER_MIN_PCT))
+    else:
+        print("层叠衰减：关（所有非聚焦窗口统一 %d%%）" % cfg.inactive_pct)
     if not cfg.fullscreen_lock:
         print("⚠️ 全屏锁定：关 —— 全屏窗口完全不接管（--skip-fullscreen）")
     if cfg.hover:
@@ -2813,10 +3113,11 @@ def list_windows(cfg: GlassConfig):
     else:
         print("悬停半透明：关")
     print("-" * 96)
-    print(f"{'HWND':>10}  {'目标':>5}  {'原因':<7} {'FZT':<4} {'类名':<28} 标题")
+    print(f"{'HWND':>10}  {'目标':>5}  {'层':>3}  {'原因':<8} {'FZT':<4} "
+          f"{'类名':<28} 标题")
     print("-" * 96)
-    for hwnd, cls, title, tgt, why, flags in rows:
-        print(f"0x{hwnd:08X}  {tgt:>4}%  {why:<7} {flags:<4} "
+    for hwnd, cls, title, tgt, why, flags, depth in rows:
+        print(f"0x{hwnd:08X}  {tgt:>4}%  {depth:>3}  {why:<8} {flags:<4} "
               f"{cls[:28]:<28} {title[:34]}")
     print("-" * 96)
 
@@ -2938,6 +3239,12 @@ def main() -> int:
                     help="悬停值在「最低→最高」之间的插值，0~1，默认 0.8")
     ap.add_argument("--hover-interval", type=float, default=None,
                     help="鼠标位置轮询间隔(秒)，默认 0.05；越小越跟手也越费 CPU")
+    ap.add_argument("--no-layer-decay", action="store_true",
+                    help="关闭「层叠衰减」：所有非聚焦窗口统一用最低透明度"
+                         "（v1.5.0 及以前的行为）")
+    ap.add_argument("--layer-decay-ratio", type=float, default=None,
+                    help="层衰减系数 0.1~1.0，默认 0.70：普通非聚焦窗口每往下"
+                         "一层就乘一次它（上一层取整后的显示值），下限 5%%")
     ap.add_argument("--fps", type=int, default=60, help="动画帧率，默认 60")
     ap.add_argument("--scan", type=float, default=0.15, help="目标重算间隔(秒)，默认 0.15")
     ap.add_argument("--rescan", type=float, default=0.50, help="窗口全量枚举间隔(秒)，默认 0.50")
@@ -2967,6 +3274,9 @@ def main() -> int:
     fade = GlassConfig.apply_saved_fade(saved, args.fade_ms)
     hover, hover_ratio = GlassConfig.apply_saved_hover(
         saved, False if args.no_hover else None, args.hover_ratio)
+    # 层叠衰减：--no-layer-decay（关）> 配置文件 > 内置默认（开）
+    layer_decay, layer_ratio = GlassConfig.apply_saved_layer(
+        saved, False if args.no_layer_decay else None, args.layer_decay_ratio)
     # 全屏锁定：--skip-fullscreen（关）> 配置文件 > 内置默认（开）
     fs_lock = GlassConfig.apply_saved_fs(
         saved, False if args.skip_fullscreen else None)
@@ -2988,6 +3298,8 @@ def main() -> int:
         hover=hover,
         hover_ratio=hover_ratio,
         hover_interval=args.hover_interval,
+        layer_decay=layer_decay,
+        layer_decay_ratio=layer_ratio,
     )
     if args.save_config and not args.no_config:
         if cfg.save():

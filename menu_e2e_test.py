@@ -154,9 +154,13 @@ def main():
         return 1
 
     sliders = tray._sliders
-    check("菜单里有 2 个滑块", len(sliders) == 2,
+    # v1.6.0 起滑块有 4 个：非聚焦最低 / 聚焦最高 / 悬停插值系数 / 层衰减系数。
+    # 断言写成「标签集合 + 数量」而不是硬编码数字，下次再加一个不会又假失败。
+    want_labels = ["非聚焦最低透明度", "聚焦最高透明度", "悬停插值系数", "层衰减系数"]
+    check("菜单里的滑块是预期的那 4 个",
+          [s.label for s in sliders] == want_labels,
           "实际 %d 个: %s" % (len(sliders), [s.label for s in sliders]))
-    if len(sliders) != 2:
+    if len(sliders) < 2:
         return 1
 
     rects = []

@@ -644,9 +644,18 @@ def test_number_input():
             return
         box["found"] = True
         box["hwnd"] = int(h)
-        edit = wg.user32.GetDlgItem(h, wg.IDC_NUM_EDIT)
+        # ⚠️ FindWindowW 可能在**子控件创建之前**就抓到顶层窗口（窗口类先注册、
+        # 顶层 CreateWindowExW 先返回，编辑框/按钮随后才建）。直接 GetDlgItem
+        # 会偶发拿到 0 —— 这是环境抖动的根源，不是产品 bug。等一小会儿。
+        edit = ok = 0
+        for _ in range(150):
+            edit = wg.user32.GetDlgItem(h, wg.IDC_NUM_EDIT)
+            ok = wg.user32.GetDlgItem(h, wg.IDC_NUM_OK)
+            if edit and ok:
+                break
+            _t.sleep(0.02)
         box["has_edit"] = bool(edit)
-        box["has_ok"] = bool(wg.user32.GetDlgItem(h, wg.IDC_NUM_OK))
+        box["has_ok"] = bool(ok)
         if value is not None and edit:
             wg.user32.SetWindowTextW(edit, value)
         if action == "ok":
@@ -733,7 +742,7 @@ def test_menu_content():
     for i, s in enumerate(items):
         print("     %2d) %s" % (i, s if s else "<分隔符>"))
 
-    check("滑块数量 == 3", len(tray._sliders) == 3,
+    check("滑块数量 == 4", len(tray._sliders) == 4,
           "实际 %d" % len(tray._sliders))
     # owner-draw 项在菜单里不存文字（文字是我们自己画的），所以标签只能从
     # MenuSlider 上取；菜单里能查的是位置和 ID。
@@ -745,21 +754,27 @@ def test_menu_content():
     check("第三个滑块是「悬停插值系数」（v1.5.0）",
           len(tray._sliders) > 2 and tray._sliders[2].label == "悬停插值系数",
           tray._sliders[2].label if len(tray._sliders) > 2 else "(无)")
+    check("第四个滑块是「层衰减系数」（v1.6.0）",
+          len(tray._sliders) > 3 and tray._sliders[3].label == "层衰减系数",
+          tray._sliders[3].label if len(tray._sliders) > 3 else "(无)")
     check("滑块在菜单里紧挨着（位置连续且递增）",
-          len(tray._sliders) == 3
+          len(tray._sliders) == 4
           and [sl.pos for sl in tray._sliders]
-          == list(range(tray._sliders[0].pos, tray._sliders[0].pos + 3)),
+          == list(range(tray._sliders[0].pos, tray._sliders[0].pos + 4)),
           "pos=%s" % [sl.pos for sl in tray._sliders])
-    check("滑块范围 5..95 / 5..100 / 0..10",
+    check("滑块范围 5..95 / 5..100 / 0..10 / 0..10",
           (tray._sliders[0].lo, tray._sliders[0].hi) == (5, 95)
           and (tray._sliders[1].lo, tray._sliders[1].hi) == (5, 100)
-          and (tray._sliders[2].lo, tray._sliders[2].hi) == (0, 10),
-          "%s / %s / %s" % ((tray._sliders[0].lo, tray._sliders[0].hi),
-                            (tray._sliders[1].lo, tray._sliders[1].hi),
-                            (tray._sliders[2].lo, tray._sliders[2].hi)))
-    check("悬停系数滑块的 ID == CMD_SLIDE_HOVER（不与其它项撞号）",
+          and (tray._sliders[2].lo, tray._sliders[2].hi) == (0, 10)
+          and (tray._sliders[3].lo, tray._sliders[3].hi) == (0, 10),
+          "%s / %s / %s / %s" % ((tray._sliders[0].lo, tray._sliders[0].hi),
+                                 (tray._sliders[1].lo, tray._sliders[1].hi),
+                                 (tray._sliders[2].lo, tray._sliders[2].hi),
+                                 (tray._sliders[3].lo, tray._sliders[3].hi)))
+    check("系数滑块 ID 不与其它项撞号（含新的 CMD_SLIDE_DECAY）",
           tray._sliders[2].cid == wg.CMD_SLIDE_HOVER
-          and len({sl.cid for sl in tray._sliders}) == 3,
+          and tray._sliders[3].cid == wg.CMD_SLIDE_DECAY
+          and len({sl.cid for sl in tray._sliders}) == 4,
           str([sl.cid for sl in tray._sliders]))
 
     # ---- 拖这个滑块，系数与悬停值都要实时跟着走（v1.5.0）----
@@ -1180,6 +1195,177 @@ def test_fullscreen_geometry():
           not (zoomed and fs))
 
 
+def test_layer_decay():
+    """K. 层叠衰减：Z 序层级 -> 透明度的纯函数 + 端到端接线。
+
+    这一节的核心是**纯函数**（round_half_up / layer_pct / assign_depths），
+    它们不碰 Win32，所以可以放心断言精确值；端到端部分只验证「接线对了」，
+    不做真实窗口的数值断言（那要靠 --list 人工体检）。
+    """
+    print("\nK. 层叠衰减：递推 / 取整 / 封底 / 层级编号")
+
+    # ---- K1. 四舍五入必须是「四舍五入」，不是银行家舍入 ----
+    check("round_half_up(24.5) = 25（内建 round 会给 24）",
+          wg.round_half_up(24.5) == 25, "%d" % wg.round_half_up(24.5))
+    check("round_half_up(17.5) = 18（内建 round 会给 18，但 2.5 才是分水岭）",
+          wg.round_half_up(17.5) == 18, "%d" % wg.round_half_up(17.5))
+    check("round_half_up(2.5) = 3（内建 round 会错误地给 2）",
+          wg.round_half_up(2.5) == 3, "%d" % wg.round_half_up(2.5))
+    check("round_half_up(0.5) = 1", wg.round_half_up(0.5) == 1)
+    check("round_half_up(12.6) = 13", wg.round_half_up(12.6) == 13)
+    check("round_half_up(24.4) = 24（够不到就进不了）",
+          wg.round_half_up(24.4) == 24)
+
+    # ---- K2. 递推链：用户给的例子 base=50 / ratio=0.70 ----
+    got = [wg.layer_pct(50, d, 0.70) for d in range(1, 11)]
+    check("base=50 ratio=0.70 → 50/35/25/18/13/9/6/5/5/5",
+          got == [50, 35, 25, 18, 13, 9, 6, 5, 5, 5], "%r" % (got,))
+    check("⭐ 第 3 层 = 25（24.5 四舍五入，不是 24）",
+          wg.layer_pct(50, 3, 0.70) == 25)
+    check("⭐ 第 4 层 = 18（17.5 四舍五入）",
+          wg.layer_pct(50, 4, 0.70) == 18)
+
+    # ---- K3. 用户原话的四窗口例子：90/50/35/25 ----
+    four = [wg.layer_pct(50, d, 0.70) for d in range(1, 4)]
+    check("⭐ 四个窗口（聚焦 90% + 三层非聚焦）→ 50/35/25",
+          four == [50, 35, 25], "%r" % (four,))
+    check("聚焦窗口不在层叠链里（它走 active_pct，由 target_for 决定）",
+          wg.layer_pct(90, 1, 0.70) == 90)   # 第 1 层永远等于 base
+
+    # ---- K4. 封底 LAYER_MIN_PCT ----
+    check("base 已低于下限 5 → 抬到 5",
+          wg.layer_pct(3, 1, 0.70) == wg.LAYER_MIN_PCT,
+          "%d" % wg.layer_pct(3, 1, 0.70))
+    check("一直乘下去最终停在 5，不会到 0",
+          all(wg.layer_pct(50, d, 0.70) >= wg.LAYER_MIN_PCT for d in range(1, 40)),
+          "第 39 层 = %d" % wg.layer_pct(50, 39, 0.70))
+    check("极限：ratio=0.1 也不会跌破 5",
+          wg.layer_pct(50, 20, 0.10) == wg.LAYER_MIN_PCT)
+    check("楼层封底后可提前 break（结果不随 depth 再变）",
+          wg.layer_pct(5, 5, 0.70) == wg.layer_pct(5, 50, 0.70) == 5)
+
+    # ---- K5. ratio 边界 ----
+    check("ratio=1.0 → 所有层都等于 base（等于关掉衰减）",
+          [wg.layer_pct(50, d, 1.0) for d in range(1, 6)] == [50] * 5)
+    check("depth<=1 原样返回 base（不乘）", wg.layer_pct(50, 1, 0.1) == 50
+          and wg.layer_pct(50, 0, 0.1) == 50)
+
+    # ---- K6. assign_depths：只有「普通非聚焦」占号 ----
+    # 模拟 Z 序（最顶在前）：置顶 A → 普通 B → 聚焦 C → 普通 D → 最大化 E
+    z = ["A", "B", "C", "D", "E"]
+    plain = {"B", "D"}                    # 只有 B/D 算普通非聚焦
+    dep = wg.assign_depths(z, plain)
+    check("⭐ 置顶/聚焦/最大化不占号：B=1、D=2",
+          dep == {"B": 1, "D": 2}, "%r" % (dep,))
+    check("不在 participants 里的窗口拿不到层号（调用方会给 0）",
+          "A" not in dep and "C" not in dep and "E" not in dep)
+    check("深度从 1 起（第 1 层即最靠上的普通非聚焦）", min(dep.values()) == 1)
+
+    # Z 序反转后编号也跟着反转（纯函数、无副作用）
+    dep2 = wg.assign_depths(list(reversed(z)), plain)
+    check("⭐ Z 序反转 → B/D 的层号互换（层级完全由 Z 序决定）",
+          dep2 == {"D": 1, "B": 2}, "%r" % (dep2,))
+    check("assign_depths 不修改入参（纯函数）",
+          z == ["A", "B", "C", "D", "E"] and plain == {"B", "D"})
+    check("空 plain → 空结果（层叠关掉时走这条）",
+          wg.assign_depths(z, set()) == {})
+
+    # ---- K7. target_for 的层叠分支 ----
+    cfg = wg.GlassConfig(active_alpha=0.90, inactive_alpha=0.50,
+                         cfg_path="", layer_decay=True, layer_decay_ratio=0.70)
+    check("cfg 层叠默认开+系数 0.70",
+          cfg.layer_decay is True and abs(cfg.layer_decay_ratio - 0.70) < 1e-9)
+    d1, r1, _ = wg.target_for(cfg, 1, depth=1)
+    d2, r2, _ = wg.target_for(cfg, 2, depth=2)
+    d3, r3, _ = wg.target_for(cfg, 3, depth=3)
+    check("depth=1 → 50%（第 1 层 = 非聚焦设定值）",
+          abs(d1 - 0.50) < 1e-9 and r1 == "第1层", "%.0f%% %s" % (d1 * 100, r1))
+    check("depth=2 → 35%", abs(d2 - 0.35) < 1e-9 and r2 == "第2层",
+          "%.0f%% %s" % (d2 * 100, r2))
+    check("depth=3 → 25%", abs(d3 - 0.25) < 1e-9 and r3 == "第3层",
+          "%.0f%% %s" % (d3 * 100, r3))
+    check("depth=0（不在层叠里）→ 走未聚焦分支",
+          wg.target_for(cfg, 9, depth=0)[1] == "未聚焦")
+
+    # ---- K8. 置顶/最大化/全屏/聚焦「视同聚焦」，层叠分支不得抢优先级 ----
+    check("⭐ 置顶窗口带 depth 也走 active_pct（视同聚焦，不参与衰减）",
+          wg.target_for(cfg, 1, top=True, depth=3) == (0.90, "置顶", False))
+    check("⭐ 最大化窗口带 depth 也走 active_pct",
+          wg.target_for(cfg, 1, zoomed=True, depth=3) == (0.90, "最大化", False))
+    check("聚焦窗口带 depth 也走 active_pct",
+          wg.target_for(cfg, 1, is_fg=True, depth=3) == (0.90, "聚焦", False))
+    check("全屏窗口带 depth 仍是恒定 100%",
+          wg.target_for(cfg, 1, fullscreen=True, depth=3)[0] == cfg.fullscreen_alpha)
+
+    # ---- K9. 关掉层叠 → 退回「统一非聚焦值」 ----
+    cfg_off = wg.GlassConfig(inactive_alpha=0.50, cfg_path="", layer_decay=False)
+    check("⭐ 层叠关 → 所有 depth 都退化成 50%（v1.5.0 行为）",
+          wg.target_for(cfg_off, 1, depth=1) == (0.50, "未聚焦", False)
+          and wg.target_for(cfg_off, 1, depth=5) == (0.50, "未聚焦", False))
+
+    # ---- K10. 系数夹紧 [0.1, 1.0] ----
+    c = wg.GlassConfig(cfg_path="")
+    c.layer_decay_ratio = 0.05
+    check("系数 0.05 被夹到下限 0.1", abs(c.layer_decay_ratio - 0.10) < 1e-9,
+          "%.3f" % c.layer_decay_ratio)
+    c.layer_decay_ratio = 1.5
+    check("系数 1.5 被夹到上限 1.0", abs(c.layer_decay_ratio - 1.0) < 1e-9,
+          "%.3f" % c.layer_decay_ratio)
+    c.layer_decay_ratio = 0.70
+    check("正常值 0.70 原样保留", abs(c.layer_decay_ratio - 0.70) < 1e-9)
+
+    # ---- K11. layer_alpha 辅助函数与 layer_pct 一致 ----
+    check("cfg.layer_alpha(d) == layer_pct(inactive_pct, d, ratio) / 100",
+          abs(cfg.layer_alpha(3) - wg.layer_pct(50, 3, 0.70) / 100.0) < 1e-9,
+          "%.2f" % cfg.layer_alpha(3))
+
+    # ---- K12. config.json 往返 ----
+    d_ = tempfile.mkdtemp(prefix="winglass_layer_")
+    p_ = os.path.join(d_, "config.json")
+    cw = wg.GlassConfig(inactive_alpha=0.5, active_alpha=0.9, cfg_path=p_,
+                        layer_decay=False, layer_decay_ratio=0.55)
+    check("落盘 layer_decay/layer_decay_ratio 字段", cw.save())
+    raw = json.load(open(p_, encoding="utf-8"))
+    check("config.json 里有 layer_decay=False", raw.get("layer_decay") is False,
+          json.dumps(raw, ensure_ascii=False))
+    check("config.json 里有 layer_decay_ratio=0.55",
+          abs(float(raw.get("layer_decay_ratio", 0)) - 0.55) < 1e-9,
+          json.dumps(raw, ensure_ascii=False))
+    loaded = wg.load_cfg_file(p_)
+    ld, lr = wg.GlassConfig.apply_saved_layer(loaded, None, None)
+    check("读回 layer_decay=False", ld is False)
+    check("读回 layer_decay_ratio=0.55", abs(lr - 0.55) < 1e-9, "%.3f" % lr)
+    check("空配置 + 无参数 → 内置默认（开 + 0.70）",
+          wg.GlassConfig.apply_saved_layer({}, None, None)
+          == (wg.GlassConfig.DEFAULT_LAYER_DECAY_ON, wg.GlassConfig.DEFAULT_LAYER_DECAY))
+
+    # ---- K13. CLI：--no-layer-decay 与 --layer-decay-ratio ----
+    import subprocess
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        r = subprocess.run([sys.executable, os.path.join(here, "win_glass.py"),
+                            "--list", "--no-config", "--no-layer-decay"],
+                           capture_output=True, timeout=60)
+        out = (r.stdout or b"").decode("utf-8", "replace")
+        check("CLI --no-layer-decay 能起来（rc=0）", r.returncode == 0,
+              (r.stderr or b"").decode("utf-8", "replace")[-150:])
+        check("CLI --no-layer-decay → 打印「层叠衰减：关」",
+              "层叠衰减：关" in out, out.splitlines()[-1][:60] if out else "")
+    except Exception as e:
+        check("CLI --no-layer-decay 能起来（rc=0）", False, repr(e))
+    try:
+        r = subprocess.run([sys.executable, os.path.join(here, "win_glass.py"),
+                            "--list", "--no-config", "--layer-decay-ratio", "0.5"],
+                           capture_output=True, timeout=60)
+        out = (r.stdout or b"").decode("utf-8", "replace")
+        check("CLI --layer-decay-ratio 0.5 能起来（rc=0）", r.returncode == 0,
+              (r.stderr or b"").decode("utf-8", "replace")[-150:])
+        check("CLI --layer-decay-ratio 0.5 → 首层 50 的第 2 层 = 25%",
+              "层叠衰减：开" in out and "0.50" in out, out.splitlines()[-1][:60] if out else "")
+    except Exception as e:
+        check("CLI --layer-decay-ratio 0.5 能起来（rc=0）", False, repr(e))
+
+
 def main():
     print("=" * 72)
     print("win_glass 托盘滑块测试")
@@ -1195,6 +1381,7 @@ def main():
     test_menu_content()
     test_hover()
     test_fullscreen_geometry()
+    test_layer_decay()
     print("\n" + "=" * 72)
     print("通过 %d 项，失败 %d 项" % (len(PASS), len(FAIL)))
     if FAIL:

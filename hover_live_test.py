@@ -60,12 +60,22 @@ def skip(name, why=""):
 
 
 INACT, ACT = 40, 100
-HOVER = 70                       # (40+100)/2
+HOVER_RATIO = 0.5                # 显式钉在中点，HOVER 才算得名副其实
+HOVER = 70                       # 40 + (100-40) × 0.5
 
 
 def new_cfg():
+    # ⚠️ 显式关掉层叠衰减（v1.6.0 起默认开）：本节只验证**悬停语义**，而层叠
+    # 衰减会把「其余未聚焦窗口」的基线从统一的 40% 变成 40/28/20/…，让
+    # 「悬停不波及别的窗口」这类断言失去可比基线。悬停 × 层叠的交互
+    # 由 slider_test.py 的 K 段（纯函数）覆盖，这里保持 v1.5.0 的干净基线。
+    #
+    # ⚠️ hover_ratio 必须显式给：v1.5.0 把悬停值从"写死的中点"改成了按系数
+    # 插值（默认 0.8 ⇒ 88%），而本文件多处断言写的是字面量 HOVER=70。不钉住
+    # 系数就会拿 88% 去比 70%，是 v1.5.0 起的过期假设。
     return wg.GlassConfig(inactive_alpha=INACT / 100.0, active_alpha=ACT / 100.0,
-                          cfg_path="")
+                          cfg_path="", layer_decay=False,
+                          hover_ratio=HOVER_RATIO)
 
 
 def real_engine(cfg):
