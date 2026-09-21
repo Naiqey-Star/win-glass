@@ -12,6 +12,10 @@ _sandbox/
 _test/
 *.log
 
+# 测试证据截图 / 离屏渲染图（本地看看就行，不入库）
+test_out/
+tools/out/
+
 # 运行时与本地状态
 win_glass.log
 *.json.tmp

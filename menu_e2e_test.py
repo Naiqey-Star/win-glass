@@ -75,9 +75,15 @@ def click(x, y, down_only=False):
 
 
 def expected_pct(x, rc, lo, hi):
-    """独立算一遍期望值（不复用被测代码的映射函数）。"""
-    x0 = rc.left + wg.SLIDER_PAD_X
-    x1 = rc.right - wg.SLIDER_PAD_X - 1
+    """独立算一遍期望值（不复用被测代码的映射函数）。
+
+    ⚠️ 手柄行程两端各内缩 SLIDER_THUMB_INSET：音量条式圆形手柄的半程是
+    它自己的半径，不内缩的话滑到两端手柄会被菜单项边缘切掉。这里的公式
+    必须跟着这个**设计常量**走，否则测试会拿旧的分段条满宽假设去算期望值。
+    """
+    inset = wg.SLIDER_THUMB_INSET
+    x0 = rc.left + wg.SLIDER_PAD_X + inset
+    x1 = rc.right - wg.SLIDER_PAD_X - inset
     frac = (x - x0) / max(1, (x1 - x0))
     frac = 0.0 if frac < 0 else (1.0 if frac > 1 else frac)
     return max(lo, min(hi, lo + int(round(frac * (hi - lo)))))
@@ -129,9 +135,18 @@ def main():
     u.SetCursorPos(*anchor)
     time.sleep(0.2)
     u.PostMessageW(tray.hwnd, wg.WM_TRAYICON, 1, wg.WM_RBUTTONUP)
-    time.sleep(1.2)
 
-    mhwnd = menu_hwnd()
+    # ⚠️ 不要用固定 sleep 等菜单：桌面忙的时候 1.2s 未必够，菜单还没出来就断言
+    # 会假失败（这个 flake 真的踩到过）。改成轮询窗口类 #32768。
+    mhwnd = 0
+    for _ in range(120):                     # 最多等 6s
+        mhwnd = menu_hwnd()
+        if mhwnd:
+            break
+        time.sleep(0.05)
+    if mhwnd:
+        time.sleep(0.4)                      # 让菜单画完第一帧再往下走
+
     check("右键菜单已弹出（找到 #32768 菜单窗口）", bool(mhwnd), "#32768=0x%X" % mhwnd)
     if not mhwnd:
         print("\n菜单没出来，后续无法继续。")

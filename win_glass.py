@@ -1,31 +1,73 @@
 # -*- coding: utf-8 -*-
 """
-win_glass.py — Windows 窗口美化工具：透明度随「聚焦 / 置顶 / 未聚焦」实时变化
+win_glass.py — Windows 窗口美化工具：透明度随「全屏 / 聚焦 / 最大化 / 置顶 / 悬停 / 未聚焦」实时变化
 
-状态规则
-    聚焦窗口  -> 100%   （托盘菜单「聚焦最高透明度」可调，5~100%）
-    置顶窗口  -> 100%   （同上，跟随「聚焦最高透明度」）
-    其余窗口  -> 40%    （托盘菜单「非聚焦最低透明度」可调，5~95%）
+状态规则（**按优先级从上到下，先命中先返回**）
+    ① 全屏窗口  -> 100%   **恒定 100%，完全不受「聚焦最高透明度」设置影响** ——
+                          全屏基本等于游戏/视频/演示，被压暗就没法看了
+    ② 聚焦窗口  -> 最大   （托盘菜单「聚焦最高透明度」可调，5~100%）
+    ③ 最大化窗口-> 最大   （同上。最大化与置顶都**视为聚焦**：它们同样占满
+    ④ 置顶窗口  -> 最大     视觉主导权，只是没有键盘焦点）
+    ⑤ 悬停窗口  -> 70%    （v1.3.0：未聚焦窗口被鼠标压住时提亮到「最大/最低」
+                           之间的插值点；默认 100%/40% ⇒ 70%）
+    ⑥ 其余窗口  -> 40%    （托盘菜单「非聚焦最低透明度」可调，5~95%）
+
+    ⇒ ②③④ 是同一组、⑤ 是另一组：悬停**只作用于"本应被压暗"的窗口**，
+      全屏/聚焦/最大化/置顶都不参与悬停（它们当前都是或应当是最高透明度，
+      按插值算只会把它们压暗）。
 
 特性
-    * 实时   —— 焦点/置顶状态一变，立刻重新起动画
+    * 实时   —— 焦点/最大化/置顶/全屏/悬停状态一变，立刻重新起动画
     * 平滑   —— 默认 500ms 缓动(smoothstep)，绝不突跳
     * 无依赖 —— 纯 ctypes 调用 user32/dwmapi，不需要 pywin32
     * 可还原 —— 退出时把透明度与窗口样式恢复原状
-    * 可调   —— 托盘右键菜单里有两个分段式滑块，步进 1%，取值持久化
+    * 可调   —— 托盘右键菜单里有三个滑块：两个透明度（步进 1%）+
+               悬停插值系数（步进 0.1），取值全部持久化
 
 用法
     python win_glass.py                   常驻运行，Ctrl+C 退出
     python win_glass.py --list            只列出窗口与其目标透明度，不改动
     python win_glass.py --self-test       用自带测试窗口验证透明度链路
     python win_glass.py --fade-ms 500 --inactive-alpha 0.4
+    python win_glass.py --no-hover        关掉「悬停半透明」
+    python win_glass.py --hover-ratio 0.8 悬停值取「最低→最高」的 80%（默认）
+    python win_glass.py --skip-fullscreen 全屏窗口完全不接管（给全屏游戏留退路）
     python win_glass.py --duration 20     跑 20 秒后自动退出并还原
 
 托盘右键菜单
-    暂停 / 立即恢复 / [非聚焦最低透明度] / [聚焦最高透明度] / 打开日志 / 退出
-    两个滑块：范围 5~95% 与 5~100%，步进 1%，显示为整数百分比。
+    暂停 / 立即恢复 / [全屏窗口固定 100%] / [悬停半透明] /
+    [非聚焦最低透明度] / [聚焦最高透明度] / 渐隐时间… / 打开日志 / 退出
+    三个滑块：范围 5~95% 与 5~100%（步进 1%、显示整数百分比），
+    以及「悬停插值系数」0.0~1.0（步进 0.1、显示一位小数）。
     拖动、鼠标滚轮、左右方向键都能调；调完写入
     %LOCALAPPDATA%\\win_glass\\config.json，下次启动自动生效。
+
+悬停半透明（v1.3.0）—— 为什么取「偏低侧偏亮」，为什么有的窗口不参与
+    * 悬停值 = 最低 + (最高 − 最低) × hover_ratio，系数**由菜单里的
+      「悬停插值系数」滑块实时调节**（0.0~1.0，步进 0.1，默认 0.8）：
+      默认 100%/40% ⇒ 88%；拖到 0.5 ⇒ 70%；拖到 0 ⇒ 等于最低值（等于没开）。
+    * 它**只提亮、绝不压暗**：参与者只有「本应被压暗的未聚焦窗口」。
+      全屏/聚焦/最大化/置顶当前都是（或应当是）最高透明度，按同一个比例算反而会
+      把它们压暗 —— 这不是用户按着鼠标想要的，所以一律不参与。
+    * 全局同时最多只有一个「悬停窗口」（鼠标只有一个点），窗口层叠时取最上层
+      的那个 —— 也就是 WindowFromPoint 真正会收到鼠标的窗口。
+    * 悬停目标变了不改动别的东西：新目标从**当前透明度**起缓动，所以鼠标快速
+      在多个窗口之间划过时，是一条连续曲线上的折线，不会突跳、也不会互相干扰。
+
+全屏窗口（v1.4.0）—— 为什么要单独定一条 100%
+    * 「全屏」= **不是最大化** 且 窗口矩形完整覆盖所在显示器的 rcMonitor
+      （见 `_is_fullscreen`）：有边框的全屏、无边框全屏（游戏常见的 borderless）、
+      F11 全屏都算。
+    * ⚠️ **最大化 ≠ 全屏**：两者是独立状态。最大化窗口的矩形因为那圈看不见的缩放
+      边框会**越出屏幕 8px**，光按矩形判会把它误判成全屏；所以 `IsZoomed()` 是
+      一票否决 —— 最大化窗口走「最高透明度」，不受本段影响。
+    * 全屏时目标值**写死 1.0**，不走「聚焦最高透明度」—— 用户把最高值调到
+      60% 是为了看清背景窗口，不是为了把全屏视频压暗。
+    * ⚠️ 但**不会白白给它加 WS_EX_LAYERED**：本来没分层的窗口加层会丢掉 DWM
+      的独立翻转/硬件叠加优化（全屏游戏可能掉帧），而 100% 的观感与非分层完全
+      一致 ⇒ "目标 100% 且我们没占过它"时一个字都不改。
+    * 想彻底不管全屏窗口（例如玩游戏时连判定都省掉）：托盘菜单里把
+      「全屏窗口固定 100%」取消勾选，或命令行 `--skip-fullscreen`。
 
 作者：月见八千代 (Yachiyo)
 """
@@ -49,7 +91,7 @@ DEFAULT_LOG = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser(
                            "win_glass", "win_glass.log")
 DEFAULT_CFG = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"),
                            "win_glass", "config.json")
-APP_VER = "1.1.0"
+APP_VER = "1.5.0"
 LOG_PATH = DEFAULT_LOG
 CFG_PATH = DEFAULT_CFG
 _IO_LOG_FH = None          # 当前接管的日志文件句柄（用于 --log 覆盖时重开）
@@ -172,6 +214,23 @@ SWP_NOZORDER = 0x0004
 SWP_NOACTIVATE = 0x0010
 SWP_FRAMECHANGED = 0x0020
 
+# ---- 悬停半透明（v1.3.0）----
+# 悬停值 = 最低 + (最高 − 最低) × HOVER_RATIO。0.8 = 偏向最高值一侧。
+HOVER_RATIO_MIN, HOVER_RATIO_MAX = 0.0, 1.0
+DEFAULT_HOVER_RATIO = 0.8
+# 托盘滑块是**整数**滑块（1 档 = 1 单位），而系数是 0.0~1.0 的一位小数，
+# 所以统一按「单位」来走：0.1 → 1 单位，范围 0~10，除以 HOVER_RATIO_UNITS 还原。
+# 这样取值精度天然是 0.1，也不会引入浮点步进误差。
+HOVER_RATIO_UNITS = 10
+# 鼠标位置的轮询间隔（秒）。50ms 足够跟手，又几乎不占 CPU：
+# 光标没动的那一轮直接返回，连 WindowFromPoint 都不做。
+DEFAULT_HOVER_INTERVAL = 0.05
+
+# ---- 全屏锁定 100%（v1.4.0）----
+# 全屏窗口的目标透明度写死这个值，**不读 active_pct**：
+# 用户调「聚焦最高透明度」是为了看清背景，不是为了压暗全屏视频/游戏。
+FULLSCREEN_ALPHA = 1.0
+
 # WinEvent
 EVENT_SYSTEM_FOREGROUND = 0x0003
 EVENT_SYSTEM_MINIMIZESTART = 0x0016
@@ -228,16 +287,30 @@ IDI_APPLICATION = 32512
 
 # 托盘菜单项
 CMD_TOGGLE, CMD_RESTORE, CMD_LOG, CMD_QUIT = 1, 2, 3, 4
-# 菜单里的两个滑块（owner-draw，不走 WM_COMMAND 业务逻辑）
+# 菜单里的三个滑块（owner-draw，不走 WM_COMMAND 业务逻辑）
 CMD_SLIDE_INACTIVE, CMD_SLIDE_ACTIVE = 10, 11
+# 「渐隐时间…」：普通菜单项，点开弹一个数值输入框
+CMD_FADE_MS = 12
+# 「悬停半透明」：普通菜单项，勾选式开关（v1.3.0）
+CMD_HOVER = 13
+# 「全屏窗口固定 100%」：勾选式开关（v1.4.0）
+CMD_FULLSCREEN = 14
+# 「悬停插值系数」：owner-draw 滑块，0.0~1.0、0.1 一档（v1.5.0）
+CMD_SLIDE_HOVER = 15
 
-# 滑块外观：整条菜单的宽度由最宽的 owner-draw 项决定
+# 滑块外观：整条菜单的宽度由最宽的 owner-draw 项决定。
+# 观感对齐 **Windows 任务栏音量条**：细轨道 + 强调色填充 + 圆形手柄。
 SLIDER_ITEM_W = 300        # 菜单项宽度(px)
-SLIDER_ITEM_H = 42         # 两行：标题+数值 / 分段条
+SLIDER_ITEM_H = 46         # 两行：标题+数值 / 轨道+手柄
 SLIDER_PAD_X = 15          # 左右留白，贴近普通菜单项的文字缩进
-SLIDER_TITLE_H = 17        # 第一行文字高度
-SLIDER_BAR_H = 13          # 分段条高度
-SLIDER_SEG_GAP = 1         # 相邻分段之间的缝隙(px)
+SLIDER_TITLE_H = 18        # 第一行文字高度
+SLIDER_TRACK_H = 4         # 轨道厚度（音量条那种细条）
+SLIDER_THUMB_R = 7         # 手柄半径：常态（直径 14）
+SLIDER_THUMB_R_HOT = 9     # 手柄半径：悬停/拖动时放大（直径 18）
+# 手柄圆心可移动范围相对轨道两端的缩进。
+# ⚠️ 取值映射（x→百分比）与绘制（百分比→圆心）**共用**这个常量，
+# 这样「点哪里手柄就停在哪儿」，而且两端能精确取到 5% / 100%。
+SLIDER_THUMB_INSET = SLIDER_THUMB_R_HOT
 
 
 class NOTIFYICONDATAW(ctypes.Structure):
@@ -312,6 +385,16 @@ WH_MSGFILTER = -1
 MSGF_MENU = 2
 PROBE_MAX = 64                  # 诊断明细最多留这么多条，常驻进程里不会无限涨
 
+# 弹出菜单窗口的窗口类名。Win32 的菜单不是控件，它就是一类叫 "#32768" 的窗口；
+# 想让它重绘，必须把 InvalidateRect 打在这个窗口上。
+MENU_CLASS = "#32768"
+# RedrawWindow 标志：立刻失效并同步重画（不等消息队列里的 WM_PAINT）
+RDW_INVALIDATE, RDW_UPDATENOW, RDW_ERASE = 0x0001, 0x0100, 0x0004
+
+# 重绘链路诊断：设 WIN_GLASS_DEBUG_REDRAW=1 后，每次 _redraw_item 都会打印
+# 目标窗口、窗口类名、各 API 返回值与 WM_DRAWITEM 计数。排查「拖了不刷新」用这个。
+DBG_REDRAW = os.environ.get("WIN_GLASS_DEBUG_REDRAW") == "1"
+
 
 class LOGFONTW(ctypes.Structure):
     _fields_ = [("lfHeight", ctypes.c_int), ("lfWidth", ctypes.c_int),
@@ -383,6 +466,20 @@ user32.MapWindowPoints.argtypes = [wt.HWND, wt.HWND, ctypes.POINTER(wt.POINT), w
 user32.MapWindowPoints.restype = ctypes.c_int
 user32.InvalidateRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT), wt.BOOL]
 user32.UpdateWindow.argtypes = [wt.HWND]
+user32.GetUpdateRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT), wt.BOOL]
+user32.GetUpdateRect.restype = wt.BOOL
+user32.GetClassNameW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+user32.GetClassNameW.restype = ctypes.c_int
+
+
+def _win_class(hwnd) -> str:
+    """取窗口类名（诊断用）。"""
+    try:
+        buf = ctypes.create_unicode_buffer(256)
+        n = user32.GetClassNameW(hwnd, buf, 255)
+        return buf.value if n else "?"
+    except Exception:
+        return "?"
 user32.SetWindowsHookExW.argtypes = [ctypes.c_int, HOOKPROC, wt.HINSTANCE, wt.DWORD]
 user32.SetWindowsHookExW.restype = wt.HANDLE
 user32.UnhookWindowsHookEx.argtypes = [wt.HANDLE]
@@ -410,6 +507,15 @@ gdi32.SelectObject.restype = wt.HGDIOBJ
 gdi32.DeleteObject.argtypes = [wt.HGDIOBJ]
 gdi32.CreateSolidBrush.argtypes = [wt.DWORD]
 gdi32.CreateSolidBrush.restype = wt.HBRUSH
+# 画圆角轨道 / 圆形手柄要用；配 NULL_PEN 可以只填充不描边，省掉自建画笔
+gdi32.GetStockObject.argtypes = [ctypes.c_int]
+gdi32.GetStockObject.restype = wt.HGDIOBJ
+gdi32.RoundRect.argtypes = [wt.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                            ctypes.c_int, ctypes.c_int, ctypes.c_int]
+gdi32.RoundRect.restype = wt.BOOL
+gdi32.Ellipse.argtypes = [wt.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+gdi32.Ellipse.restype = wt.BOOL
+NULL_PEN = 8
 
 user32.RegisterClassW.argtypes = [ctypes.POINTER(WNDCLASSW)]
 user32.RegisterClassW.restype = wt.ATOM
@@ -467,6 +573,8 @@ user32.GetAncestor.argtypes = [wt.HWND, wt.UINT]
 user32.GetAncestor.restype = wt.HWND
 user32.GetWindowRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
 user32.GetWindowTextW.argtypes = [wt.HWND, ctypes.c_wchar_p, ctypes.c_int]
+user32.SetWindowTextW.argtypes = [wt.HWND, ctypes.c_wchar_p]
+user32.SetWindowTextW.restype = wt.BOOL
 user32.GetClassNameW.argtypes = [wt.HWND, ctypes.c_wchar_p, ctypes.c_int]
 user32.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
 user32.MonitorFromWindow.argtypes = [wt.HWND, wt.DWORD]
@@ -485,8 +593,28 @@ user32.SetWinEventHook.argtypes = [wt.UINT, wt.UINT, wt.HMODULE, WINEventProc,
 user32.SetWinEventHook.restype = wt.HANDLE
 user32.UnhookWinEvent.argtypes = [wt.HANDLE]
 user32.PostThreadMessageW.argtypes = [wt.DWORD, wt.UINT, wt.WPARAM, wt.LPARAM]
+user32.FindWindowW.argtypes = [wt.LPCWSTR, wt.LPCWSTR]
+user32.FindWindowW.restype = wt.HWND
+user32.IsWindow.argtypes = [wt.HWND]
+user32.IsWindow.restype = wt.BOOL
+# v1.4.0：最大化判定。⚠️ 必须显式声明 argtypes —— 不给的话 ctypes 会把 HWND
+# 当 c_int 传（32 位截断），在句柄值大的机器上会静默判错窗口。
+user32.IsZoomed.argtypes = [wt.HWND]
+user32.IsZoomed.restype = wt.BOOL
+user32.RedrawWindow.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT), wt.HANDLE, wt.UINT]
+user32.RedrawWindow.restype = wt.BOOL
+user32.WindowFromPoint.argtypes = [wt.POINT]
+user32.WindowFromPoint.restype = wt.HWND
+user32.GetClientRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
+user32.GetClientRect.restype = wt.BOOL
 if dwmapi is not None:
     dwmapi.DwmGetWindowAttribute.argtypes = [wt.HWND, wt.DWORD, ctypes.c_void_p, wt.DWORD]
+    try:
+        dwmapi.DwmGetColorizationColor.argtypes = [ctypes.POINTER(wt.DWORD),
+                                                   ctypes.POINTER(wt.BOOL)]
+        dwmapi.DwmGetColorizationColor.restype = ctypes.c_long
+    except Exception:
+        pass
 
 
 # --------------------------------------------------------------------------
@@ -521,7 +649,53 @@ def _is_cloaked(hwnd: int) -> bool:
         return False
 
 
-def _is_fullscreen(hwnd: int, rc: wt.RECT) -> bool:
+# ⚠️ 全屏判定的矩形容差（像素）。真全屏窗口的矩形理论上正好等于 rcMonitor，
+# 但不同 DPI 缩放 / 进程 DPI 感知级别下会有一两像素的取整误差；而"窗口比屏幕
+# 小 1px"显然不该被踢出全屏。只朝"略小"方向放宽，不朝"略大"方向放宽。
+FS_SLACK = 2
+
+
+def rect_covers_monitor(rc, m, slack: int = FS_SLACK) -> bool:
+    """纯几何判定：窗口矩形是否覆盖整个监视器（允许 slack 像素的内缩误差）。
+
+    抽成纯函数是为了可测 —— 不碰任何 Win32 调用，测试里直接喂合成矩形。
+    """
+    return (rc.left <= m.left + slack and rc.top <= m.top + slack
+            and rc.right >= m.right - slack and rc.bottom >= m.bottom - slack)
+
+
+def _is_fullscreen(hwnd: int, rc: wt.RECT, *, zoomed: bool = None) -> bool:
+    """窗口是否处于**真正的全屏**状态。
+
+    ⭐ 关键：**最大化窗口永远不是全屏**（这是 v1.4.0 的一个真 bug 的修复点）。
+
+    为什么必须显式排除最大化：
+      Windows 在窗口最大化时，会让窗口矩形**越过屏幕边缘**——那圈看不见的
+      缩放边框（`SM_CXSIZEFRAME` + `SM_CXPADDEDBORDER`，本机 = 4+4）会朝左右下
+      （新系统上下都算）各外扩 8px。于是本机实测最大化窗口矩形 =
+      (-8,-8,1928,1088)，而屏幕是 (0,0,1920,1080)：
+
+          rc.left(-8) <= m.left(0)    ✓
+          rc.right(1928) >= m.right(1920)  ✓     →  包含判定"成立"
+                                                  →  最大化被误判成全屏
+                                                  →  target = FULLSCREEN_ALPHA = 1.0
+                                                  →  用户设的「最高透明度」失效
+
+      所以不能只做"矩形包含"判断：`IsZoomed()` 才是 Windows 对"用户按了最大化"
+      的权威认定，必须作为**一票否决**挡在前面。
+
+    ⚠️ 也别指望用 rcWork ≠ rcMonitor 来区分两者：任务栏设为自动隐藏时
+    rcWork 与 rcMonitor **完全相等**（本机就是这样），那条思路直接失效。
+
+    反过来，"真全屏"的 `IsZoomed()` 是 **False**（F11、无边框全屏、游戏全屏
+    都只是把矩形撑满，不走 SW_MAXIMIZE）—— 这正是两者可以干净分开的原因。
+
+    传了 `zoomed` 就复用调用方已经取到的值，省一次 Win32 调用。
+    """
+    if zoomed is None:
+        zoomed = bool(user32.IsZoomed(hwnd))
+    if zoomed:
+        return False
     mon = user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
     if not mon:
         return False
@@ -529,9 +703,34 @@ def _is_fullscreen(hwnd: int, rc: wt.RECT) -> bool:
     mi.cbSize = ctypes.sizeof(MONITORINFO)
     if not user32.GetMonitorInfoW(mon, byref(mi)):
         return False
-    m = mi.rcMonitor
-    return (rc.left <= m.left and rc.top <= m.top
-            and rc.right >= m.right and rc.bottom >= m.bottom)
+    return rect_covers_monitor(rc, mi.rcMonitor)
+
+
+def read_window_state(hwnd: int, st=None):
+    """一次读出判定所需的全部窗口属性：置顶 / 最大化 / 全屏。
+
+    返回 (top, zoomed, fullscreen)；传了 st 就顺手写回它的缓存字段，
+    省得调用方再赋值一遍。
+
+    ⚠️ 「最大化」用 IsZoomed，「全屏」必须靠**矩形覆盖整个监视器 + 不是最大化** ——
+    这两者是**互相独立**的状态，不能用一个去解释另一个：
+      · 「最大化」IsZoomed()==True，矩形往往**越出屏幕 8px**（那圈看不见的缩放边框）
+      · 「全屏」（F11 / 无边框 / 游戏）IsZoomed()==False，矩形正好铺满
+
+    只按矩形判会把最大化误判成全屏（进而锁定 100%，用户设的最高透明度失效），
+    所以 `_is_fullscreen()` 里 IsZoomed 是一票否决。判定全屏必须排在最大化前面，
+    见 target_for()。
+    """
+    ex = _GetWindowLong(hwnd, GWL_EXSTYLE)
+    top = bool(ex & WS_EX_TOPMOST)
+    zoomed = bool(user32.IsZoomed(hwnd))
+    fs = False
+    rc = wt.RECT()
+    if user32.GetWindowRect(hwnd, byref(rc)):
+        fs = _is_fullscreen(hwnd, rc, zoomed=zoomed)
+    if st is not None:
+        st.topmost, st.zoomed, st.fullscreen = top, zoomed, fs
+    return top, zoomed, fs
 
 
 def smoothstep(t: float) -> float:
@@ -615,12 +814,23 @@ class GlassConfig:
     ACTIVE_MIN_PCT, ACTIVE_MAX_PCT = 5, 100
     # 内置默认值（既没有命令行参数、也没有配置文件时用）
     DEFAULT_INACTIVE_PCT, DEFAULT_ACTIVE_PCT = 40, 100
+    # 渐隐时长（ms）：菜单里「渐隐时间…」可输入，配置文件也能存
+    FADE_MIN_MS, FADE_MAX_MS = 1, 5000
+    DEFAULT_FADE_MS = 500
+    # 悬停插值比例：0=等于最低透明度（等于没开），1=等于最高透明度，0.8=偏向最高值
+    DEFAULT_HOVER_RATIO = DEFAULT_HOVER_RATIO          # 见模块顶部常量
+    DEFAULT_HOVER = True
+    # 悬停插值系数滑块的档位数：0~HOVER_RATIO_UNITS（即 0.0~1.0，1 档 = 0.1）
+    HOVER_RATIO_UNITS = HOVER_RATIO_UNITS              # 见模块顶部常量
+    # 全屏窗口默认「接管并锁定 100%」——见模块顶部「全屏窗口（v1.4.0）」说明
+    DEFAULT_FULLSCREEN_LOCK = True
 
     def __init__(self, inactive_alpha=0.40, active_alpha=1.00, fade_ms=500, fps=60,
                  scan_interval=0.15, rescan_interval=0.50,
-                 skip_fullscreen=True, skip_foreign_layered=False,
+                 fullscreen_lock=None, skip_foreign_layered=False,
                  extra_exclude=(), verbose=False, restore_on_exit=True,
-                 tray=True, log_path="", cfg_path=None):
+                 tray=True, log_path="", cfg_path=None,
+                 hover=None, hover_ratio=None, hover_interval=None):
         # cfg_path=None → 用默认路径；cfg_path="" → 明确关闭持久化
         self.cfg_path = CFG_PATH if cfg_path is None else cfg_path
         # None 视为「没指定」，落到内置默认；否则 _to_pct(None) 会直接 TypeError
@@ -628,11 +838,15 @@ class GlassConfig:
                              else _to_pct(inactive_alpha))
         self.active_pct = (self.DEFAULT_ACTIVE_PCT if active_alpha is None
                            else _to_pct(active_alpha))
-        self.fade_ms = max(int(fade_ms), 1)
+        # None 视为「没指定」，落到内置默认；否则 int(None) 会直接 TypeError
+        self.fade_ms = (self.DEFAULT_FADE_MS if fade_ms is None else fade_ms)
         self.fps = max(int(fps), 10)
         self.scan_interval = max(float(scan_interval), 0.02)
         self.rescan_interval = max(float(rescan_interval), 0.05)
-        self.skip_fullscreen = bool(skip_fullscreen)
+        # 全屏窗口：True（默认）= 接管并**锁定 100%**；False = 完全不接管。
+        # None 视为「没指定」→ 内置默认，首次运行 / --no-config 都要能用。
+        self.fullscreen_lock = (self.DEFAULT_FULLSCREEN_LOCK
+                                if fullscreen_lock is None else bool(fullscreen_lock))
         # Chromium/Electron 系应用会自行使用 WS_EX_LAYERED(alpha 常非 255)。
         # 本工具会记录并原样还原；若仍不放心，可开启此开关直接跳过这类窗口。
         self.skip_foreign_layered = bool(skip_foreign_layered)
@@ -641,6 +855,12 @@ class GlassConfig:
         self.restore_on_exit = bool(restore_on_exit)
         self.tray = bool(tray)
         self.log_path = log_path or ""
+        # 悬停半透明：None 一律回落到内置默认（首次运行 / --no-config 都要能用）
+        self.hover = self.DEFAULT_HOVER if hover is None else bool(hover)
+        self.hover_ratio = (self.DEFAULT_HOVER_RATIO if hover_ratio is None
+                            else hover_ratio)
+        self.hover_interval = (DEFAULT_HOVER_INTERVAL if hover_interval is None
+                               else hover_interval)
 
     # ---- 非聚焦最低透明度（5~95%）----
     @property
@@ -678,11 +898,92 @@ class GlassConfig:
     def active_alpha(self, v):
         self.active_pct = _to_pct(v)
 
+    # ---- 渐隐时长（FADE_MIN_MS ~ FADE_MAX_MS）----
+    @property
+    def fade_ms(self) -> int:
+        return self._fade_ms
+
+    @fade_ms.setter
+    def fade_ms(self, v):
+        self._fade_ms = max(self.FADE_MIN_MS,
+                            min(self.FADE_MAX_MS, int(round(float(v)))))
+
+    # ---- 悬停半透明 ----
+    @property
+    def hover(self) -> bool:
+        return self._hover
+
+    @hover.setter
+    def hover(self, v):
+        self._hover = bool(v)
+
+    @property
+    def hover_ratio(self) -> float:
+        return self._hover_ratio
+
+    @hover_ratio.setter
+    def hover_ratio(self, v):
+        # 夹到 [0,1]：这保证悬停值**恒在**最低值与最高值之间，不会跑到范围外。
+        # （ratio=0 → 悬停无效果；ratio=1 → 悬停即最高透明度）
+        self._hover_ratio = max(HOVER_RATIO_MIN,
+                                min(HOVER_RATIO_MAX, float(v)))
+
+    @property
+    def hover_interval(self) -> float:
+        return self._hover_interval
+
+    @hover_interval.setter
+    def hover_interval(self, v):
+        # 下限 0.02s：再快也只是白烧 CPU —— 60fps 主循环本来就会节流
+        self._hover_interval = max(0.02, float(v))
+
+    @property
+    def hover_pct(self) -> int:
+        """悬停目标（整数百分比）：最低 → 最高 之间按 hover_ratio 插值。
+
+        用户例子：最高 100% / 最低 50% ⇒ 90%。默认 100%/40% ⇒ 88%。
+
+        最后的 max(…, 最低值) 是**结构性保证「悬停永远不压暗」**：
+        ratio 已被夹到 [0,1]，所以常规配置（最高 ≥ 最低）下这个 max 恒等于
+        插值公式本身、等于没写；只有用户把最高值调到比最低值还低（反向配置，
+        滑块允许）时，插值结果才会低于最低值 —— 那种情况下悬停退化为"不改变"，
+        而不是把窗口进一步压暗。
+        """
+        lo, hi = self._inactive_pct, self._active_pct
+        mid = int(round(lo + (hi - lo) * self._hover_ratio))
+        return max(mid, lo)
+
+    @property
+    def hover_alpha(self) -> float:
+        return self.hover_pct / 100.0
+
+    # ---- 全屏锁定（v1.4.0）----
+    @property
+    def fullscreen_lock(self) -> bool:
+        """True = 接管全屏窗口并把透明度**锁死在 100%**（默认）。
+
+        False = 完全不接管全屏窗口（v1.3.0 及以前的行为，给全屏游戏留退路）。
+        """
+        return self._fullscreen_lock
+
+    @fullscreen_lock.setter
+    def fullscreen_lock(self, v):
+        self._fullscreen_lock = bool(v)
+
+    @property
+    def fullscreen_alpha(self) -> float:
+        """全屏窗口的目标透明度：**恒定 100%，不读 active_pct**。"""
+        return FULLSCREEN_ALPHA
+
     # ---- 持久化 ----
     def as_dict(self) -> dict:
         return {"version": 1,
                 "inactive_percent": self._inactive_pct,
-                "active_percent": self._active_pct}
+                "active_percent": self._active_pct,
+                "fade_ms": self._fade_ms,
+                "hover_enabled": bool(self._hover),
+                "hover_ratio": round(float(self._hover_ratio), 3),
+                "fullscreen_lock": bool(self._fullscreen_lock)}
 
     def save(self) -> bool:
         return save_cfg_file(self.as_dict(), self.cfg_path)
@@ -705,6 +1006,43 @@ class GlassConfig:
                                        cls.DEFAULT_ACTIVE_PCT)
         return inactive, active
 
+    @classmethod
+    def apply_saved_fade(cls, saved: dict, fade_ms):
+        """渐隐时间：命令行没给就用配置文件里的，再不行落内置默认。
+
+        单独一个方法、而不是塞进 apply_saved 的返回值，是为了不破坏既有调用方
+        （slider_test.py 按 (inactive, active) 二元组断言过）。
+        """
+        if fade_ms is None:
+            fade_ms = (saved or {}).get("fade_ms", cls.DEFAULT_FADE_MS)
+        return fade_ms
+
+    @classmethod
+    def apply_saved_hover(cls, saved: dict, hover, hover_ratio):
+        """悬停开关与插值比例：命令行 > 配置文件 > 内置默认。
+
+        返回 (hover, hover_ratio)；同样单独一个方法，避免动到 apply_saved 的
+        二元组契约。
+        """
+        if hover is None:
+            hv = (saved or {}).get("hover_enabled", cls.DEFAULT_HOVER)
+            hover = cls.DEFAULT_HOVER if hv is None else bool(hv)
+        if hover_ratio is None:
+            hover_ratio = (saved or {}).get("hover_ratio", cls.DEFAULT_HOVER_RATIO)
+        return hover, hover_ratio
+
+    @classmethod
+    def apply_saved_fs(cls, saved: dict, fullscreen_lock):
+        """全屏锁定开关：命令行 > 配置文件 > 内置默认。
+
+        返回 None 表示"都没指定，用内置默认"（构造函数的 None 语义），
+        这样调用方不用重复写一遍默认值。
+        """
+        if fullscreen_lock is not None:
+            return bool(fullscreen_lock)
+        v = (saved or {}).get("fullscreen_lock", None)
+        return None if v is None else bool(v)
+
 
 # --------------------------------------------------------------------------
 # 单窗口状态
@@ -712,7 +1050,8 @@ class GlassConfig:
 class WinState:
     __slots__ = ("hwnd", "cur", "src", "dst", "t0", "dur",
                  "layered_owned", "framechanged", "orig_alpha",
-                 "applied", "failed", "title", "cls", "topmost", "is_fg")
+                 "applied", "failed", "title", "cls",
+                 "topmost", "is_fg", "zoomed", "fullscreen", "hover")
 
     def __init__(self, hwnd: int):
         self.hwnd = hwnd
@@ -730,6 +1069,9 @@ class WinState:
         self.cls = ""
         self.topmost = False
         self.is_fg = False
+        self.zoomed = False     # 最大化（IsZoomed）
+        self.fullscreen = False # 矩形铺满所在显示器（含无边框全屏）
+        self.hover = False      # 本轮鼠标是否压在这个窗口上
 
 
 def is_manageable(hwnd: int, cfg: GlassConfig, self_pid: int) -> bool:
@@ -759,7 +1101,10 @@ def is_manageable(hwnd: int, cfg: GlassConfig, self_pid: int) -> bool:
         return False
     if not _window_text(hwnd) and not (ex & WS_EX_APPWINDOW):
         return False
-    if cfg.skip_fullscreen and _is_fullscreen(hwnd, rc):
+    if not cfg.fullscreen_lock and _is_fullscreen(hwnd, rc):
+        # 只有显式关掉「全屏锁定」时才整窗排除（v1.3.0 及以前的默认行为）。
+        # 默认不排除：全屏窗口要留在受管集合里，才能被锁定到 100%
+        # —— 因为 rescan 会漏掉"刚变成全屏"的那一帧，被排除就等于没人管它。
         return False
     return True
 
@@ -778,6 +1123,79 @@ def scan_windows(cfg: GlassConfig, self_pid: int):
 
     user32.EnumWindows(_cb, 0)
     return found
+
+
+def cursor_pos():
+    """当前光标坐标 (x, y)；取不到返回 None。
+
+    单独抽一层是为了可测：_poll_hover 的全部判定都基于它返回的坐标，
+    测试里把它换掉就能在**不真的移动用户鼠标**的前提下驱动悬停逻辑。
+    """
+    pt = wt.POINT()
+    if not user32.GetCursorPos(byref(pt)):
+        return None
+    return int(pt.x), int(pt.y)
+
+
+def cursor_root_window() -> int:
+    """鼠标此刻压在哪个**顶层**窗口上（取不到返回 0）。
+
+    * WindowFromPoint 返回的是「真正会收到这个鼠标消息的那个窗口」，
+      可能是个子控件（编辑框、面板…），所以必须 GetAncestor(GA_ROOT) 归一
+      到顶层 —— 否则永远匹配不上我们接管的那些顶层 HWND。
+    * 顺便天然处理了层叠顺序：取到的就是视觉上最上层的那一个，
+      上下叠了多少个窗口都不影响判定。
+    """
+    pos = cursor_pos()
+    if pos is None:
+        return 0
+    pt = wt.POINT(pos[0], pos[1])
+    hwnd = _h(user32.WindowFromPoint(pt))
+    if not hwnd:
+        return 0
+    return _h(user32.GetAncestor(hwnd, GA_ROOT)) or hwnd
+
+
+def target_for(cfg: "GlassConfig", hwnd: int, *, is_fg: bool = False,
+               top: bool = False, zoomed: bool = False, fullscreen: bool = False,
+               hover_hwnd: int = 0):
+    """唯一的「目标透明度判定」出口。返回 (目标不透明度, 理由, 是否悬停中)。
+
+    放在模块级、而不是 GlassEngine 的方法，是为了让 `--list` 体检打印的结果
+    与引擎实际会做的事**共用同一份逻辑** —— 分两处写早晚会不一致。
+
+    优先级（先命中先返回）：
+      ① 全屏窗口   —— **恒定 100%（cfg.fullscreen_alpha），完全不读 active_pct**。
+                      全屏基本就是游戏/视频/演示，用户调「聚焦最高透明度」
+                      是为了看清背景窗口，不是为了把全屏画面压暗。
+                      必须排在聚焦前面：全屏窗口几乎总是同时"聚焦"的。
+      ② 聚焦窗口   —— active_pct（滑块可调）
+      ③ 最大化窗口 —— active_pct（**视为聚焦**：占满屏幕，视觉主导权等价）
+      ④ 置顶窗口   —— active_pct（**视为聚焦**：虽然没键盘焦点，但压在所有窗口
+                      之上，压暗它反而更看不清）
+      ⑤ 悬停窗口   —— 插值点值（最低 + (最高−最低) × hover_ratio），
+                      **只对"本应被压暗"的窗口生效**
+      ⑥ 其余       —— inactive_pct
+
+    ②③④ 属于同一组、⑤ 属于另一组：悬停只在"基础目标 = 最低值"的窗口上生效。
+    全屏/聚焦/最大化/置顶当前都是（或应当是）最高透明度，按插值算只会把它们
+    压暗 ⇒ 一律不参与悬停。这样"悬停"在语义上**只会提亮、绝不会压暗**任何窗口。
+
+    ⚠️ 参数全部强制关键字（`*`）：以前是位置参数 (is_fg, top, hover_hwnd)，
+    现在中间插进了 zoomed/fullscreen —— 保持位置传递会让老调用悄悄错位，
+    所以宁可让它直接 TypeError。
+    """
+    if fullscreen:
+        return cfg.fullscreen_alpha, "全屏", False
+    if is_fg:
+        return cfg.active_alpha, "聚焦", False
+    if zoomed:
+        return cfg.active_alpha, "最大化", False
+    if top:
+        return cfg.active_alpha, "置顶", False
+    if cfg.hover and hover_hwnd and hover_hwnd == hwnd:
+        return cfg.hover_alpha, "悬停", True
+    return cfg.inactive_alpha, "未聚焦", False
 
 
 # --------------------------------------------------------------------------
@@ -843,37 +1261,182 @@ def _mix(c1: int, c2: int, t: float) -> int:
     return out
 
 
+_ACCENT_CACHE = None
+
+
+def _luma(color: int) -> float:
+    r, g, b = color & 0xFF, (color >> 8) & 0xFF, (color >> 16) & 0xFF
+    return 0.299 * r + 0.587 * g + 0.114 * b
+
+
+def _accent_color() -> int:
+    """系统强调色（COLORREF）。取不到、或与菜单底色对比度太低时退回默认蓝。
+
+    任务栏音量条的填充色用的就是系统强调色，这里跟随同一个来源。
+    取值优先级：
+      1) HKCU\\...\\DWM\\AccentColor            —— 权威的强调色（ABGR，低 24 位即 COLORREF）
+      2) HKCU\\...\\Explorer\\Accent\\AccentColorMenu
+      3) DwmGetColorizationColor                —— 取不到注册表时的近似值
+      4) 内置默认蓝 #2F6FE4
+    强调色被设成接近菜单底色的颜色时会「看不见」，所以最后还有一道对比度检查。
+    """
+    global _ACCENT_CACHE
+    if _ACCENT_CACHE is not None:
+        return _ACCENT_CACHE
+    default = 0xE46F2F                     # COLORREF 是 BGR：#2F6FE4（Windows 默认蓝）
+    c = 0
+    try:
+        import winreg
+        for path, name in ((r"Software\Microsoft\Windows\DWM", "AccentColor"),
+                           (r"Software\Microsoft\Windows\CurrentVersion"
+                            r"\Explorer\Accent", "AccentColorMenu")):
+            try:
+                k = winreg.OpenKey(winreg.HKEY_CURRENT_USER, path)
+                try:
+                    v, _t = winreg.QueryValueEx(k, name)
+                finally:
+                    winreg.CloseKey(k)
+                if int(v) & 0xFFFFFF:
+                    c = int(v) & 0xFFFFFF     # 低位起就是 R,G,B，正好是 COLORREF
+                    break
+            except OSError:
+                continue
+    except Exception:
+        pass
+    if not c:
+        try:
+            if dwmapi is not None:
+                argb = wt.DWORD(0)
+                opaque = wt.BOOL(0)
+                if dwmapi.DwmGetColorizationColor(byref(argb), byref(opaque)) == 0:
+                    v = int(argb.value)    # 0xAARRGGBB
+                    c = ((v & 0xFF) << 16) | ((v >> 8) & 0xFF00) | ((v >> 16) & 0xFF)
+        except Exception:
+            c = 0
+    if not c:
+        c = default
+    if abs(_luma(c) - _luma(int(user32.GetSysColor(COLOR_MENU)))) < 40:
+        c = default
+    _ACCENT_CACHE = c
+    return c
+
+
 def _slider_colors(selected: bool, disabled: bool):
-    """返回 (已填充色, 未填充色, 边框色)。跟随系统主题与选中态。"""
+    """返回 (已填充色, 轨道底色, 手柄色, 手柄外圈色)。跟随系统主题与选中态。"""
     menu_bg = int(user32.GetSysColor(COLOR_MENU))
     dark = _menu_is_dark()
     if disabled:
         edge = int(user32.GetSysColor(COLOR_GRAYTEXT))
-        return _mix(menu_bg, edge, 0.35), _mix(menu_bg, edge, 0.16), \
-            _mix(menu_bg, edge, 0.30)
+        return (_mix(menu_bg, edge, 0.35), _mix(menu_bg, edge, 0.16),
+                _mix(menu_bg, edge, 0.35), _mix(menu_bg, edge, 0.30))
     if selected:
+        # 选中时整行是强调色背景：手柄与填充改用高亮文字色才看得见
         bg = int(user32.GetSysColor(COLOR_HIGHLIGHT))
-        # 选中时整行是强调色背景：已填充段用高亮文字色，未填充段压在背景上
-        return int(user32.GetSysColor(COLOR_HIGHLIGHTTEXT)), _mix(bg, menu_bg, 0.45), \
-            _mix(bg, menu_bg, 0.70)
-    accent = 0xE46F2F if dark else 0xE46F2F          # COLORREF 是 BGR：蓝调 #2F6FE4
-    empty = 0x4A4A4A if dark else 0xC9C9C9
-    return accent, empty, (0x6E6E6E if dark else 0x9A9A9A)
+        ht = int(user32.GetSysColor(COLOR_HIGHLIGHTTEXT))
+        return ht, _mix(bg, menu_bg, 0.45), ht, _mix(bg, menu_bg, 0.62)
+    accent = _accent_color()
+    track = 0x4A4A4A if dark else 0xC9C9C9
+    ring = _mix(accent, 0x000000, 0.28) if not dark else _mix(accent, 0xFFFFFF, 0.18)
+    return accent, track, accent, ring
 
 
-def draw_menu_slider(dis, label: str, lo: int, hi: int, pct: int):
-    """把一个 owner-draw 菜单项画成分段式滑块。
+def _track_geom(rc):
+    """轨道两端、以及手柄圆心可移动的范围。
+
+    ⚠️ 绘制（百分比→圆心）与命中判定（x→百分比）**共用**这一组坐标，
+    否则「点了这里、手柄却停在那里」，两端也取不满。
+    """
+    left = rc.left + SLIDER_PAD_X
+    right = rc.right - SLIDER_PAD_X
+    cx0 = left + SLIDER_THUMB_INSET
+    cx1 = right - SLIDER_THUMB_INSET
+    if cx1 <= cx0:
+        cx1 = cx0 + 1
+    return left, right, cx0, cx1
+
+
+def _track_center_y(rc) -> int:
+    """轨道的垂直中线（相对菜单项矩形）。
+
+    绘制和自动化测试**共用**这一个公式：测试要沿这一行逐像素扫描来反查
+    填充边界，公式一旦不一致，测试就会去扫一条根本没画东西的线。
+    """
+    r1_bottom = rc.top + 3 + SLIDER_TITLE_H      # 第一行(标题/数值)的底
+    row_top = r1_bottom + 2
+    row_bot = rc.bottom - 3
+    if row_bot <= row_top:
+        row_bot = row_top + 1
+    return (row_top + row_bot) // 2
+
+
+def pct_to_thumb_x(pct: int, lo: int, hi: int, rc) -> int:
+    """百分比 → 手柄圆心 x。"""
+    _, _, cx0, cx1 = _track_geom(rc)
+    frac = 0.0 if hi <= lo else (int(pct) - lo) / float(hi - lo)
+    frac = max(0.0, min(1.0, frac))
+    return int(round(cx0 + frac * (cx1 - cx0)))
+
+
+def x_to_pct(x: int, lo: int, hi: int, rc) -> int:
+    """鼠标 x → 1% 步进的整数值。"""
+    _, _, cx0, cx1 = _track_geom(rc)
+    frac = (x - cx0) / float(max(1, cx1 - cx0))
+    frac = max(0.0, min(1.0, frac))
+    return max(lo, min(hi, lo + int(round(frac * (hi - lo)))))
+
+
+def _fill_capsule(hdc, l, t, r, b, color):
+    """圆头胶囊（轨道 / 已填充部分）。用 NULL_PEN 只填充不描边。"""
+    h = max(2, b - t)
+    if (r - l) < h:
+        r = l + h
+    ob = gdi32.SelectObject(hdc, _brush(color))
+    op = gdi32.SelectObject(hdc, gdi32.GetStockObject(NULL_PEN))
+    gdi32.RoundRect(hdc, l, t, r, b, h, h)
+    gdi32.SelectObject(hdc, op)
+    gdi32.SelectObject(hdc, ob)
+
+
+def _fill_circle(hdc, cx, cy, rad, color):
+    ob = gdi32.SelectObject(hdc, _brush(color))
+    op = gdi32.SelectObject(hdc, gdi32.GetStockObject(NULL_PEN))
+    gdi32.Ellipse(hdc, cx - rad, cy - rad, cx + rad, cy + rad)
+    gdi32.SelectObject(hdc, op)
+    gdi32.SelectObject(hdc, ob)
+
+
+def fmt_pct(v) -> str:
+    """滑块数值 → 显示文本：百分数（非聚焦/聚焦那两个滑块）。"""
+    return "%d%%" % int(v)
+
+
+def fmt_ratio_units(v) -> str:
+    """滑块数值 → 显示文本：一位小数（悬停插值系数，单位 0.1）。"""
+    return "%.1f" % (int(v) / float(HOVER_RATIO_UNITS))
+
+
+def draw_menu_slider(dis, label: str, lo: int, hi: int, pct: int,
+                     hot: bool = False, text: str = None):
+    """把一个 owner-draw 菜单项画成**音量条式**滑块。
 
     布局（两行）：
         非聚焦最低透明度                      40%     <- 左标题 / 右数值
-        ▮▮▮▮▮▮▮▮▮▮▮▮▯▯▯▯▯▯▯▯▯▯▯▯▯▯▯▯▯▯▯▯▯▯▯▯     <- 分段条，每段 = 1%
+        ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━         <- 细轨道 + 圆形手柄
+
+    与 v1.1.0 的「分段条（每段 1%）」相比，形状 / 比例 / 手柄反馈都对齐
+    Windows 任务栏音量条；取值精度不变 —— 仍是 1 档步进。
+
+    `text` 是右下角那个数值的显示文本；不传就按百分比显示。
+    悬停插值系数滑块传 "0.8" 这种一位小数（它的内部单位是 0.1）。
     """
     hdc = dis.hDC
     rc = dis.rcItem
     selected = bool(dis.itemState & ODS_SELECTED)
     disabled = bool(dis.itemState & (ODS_GRAYED | ODS_DISABLED))
     pct = max(lo, min(hi, int(pct)))
-    fill_c, empty_c, edge_c = _slider_colors(selected, disabled)
+    if text is None:
+        text = fmt_pct(pct)
+    fill_c, track_c, thumb_c, ring_c = _slider_colors(selected, disabled)
 
     # 背景必须自己刷：owner-draw 项不会被系统自动填充
     user32.FillRect(hdc, byref(rc), user32.GetSysColorBrush(
@@ -890,40 +1453,35 @@ def draw_menu_slider(dis, label: str, lo: int, hi: int, pct: int):
     left = rc.left + SLIDER_PAD_X
     right = rc.right - SLIDER_PAD_X
 
-    # ---- 第一行：标题 + 整数百分比 ----
+    # ---- 第一行：标题 + 当前值（百分比 或 一位小数）----
     r1 = wt.RECT(left, rc.top + 3, right, rc.top + 3 + SLIDER_TITLE_H)
     gdi32.SetTextColor(hdc, text_c)
     user32.DrawTextW(hdc, label, -1, byref(r1), DT_LEFT | DT_VCENTER | DT_SINGLELINE)
-    user32.DrawTextW(hdc, "%d%%" % pct, -1, byref(r1),
+    user32.DrawTextW(hdc, text, -1, byref(r1),
                      DT_RIGHT | DT_VCENTER | DT_SINGLELINE)
 
-    # ---- 第二行：分段条 ----
-    bar = wt.RECT(left, r1.bottom + 3, right, r1.bottom + 3 + SLIDER_BAR_H)
-    if bar.bottom > rc.bottom - 2:
-        bar.bottom = rc.bottom - 2
-    if bar.bottom <= bar.top:
-        bar.bottom = bar.top + 1
+    # ---- 第二行：细轨道 + 圆形手柄 ----
+    cy = _track_center_y(rc)
 
-    # 底槽
-    user32.FillRect(hdc, byref(bar), _brush(empty_c))
+    t_left, t_right, _, _ = _track_geom(rc)
+    th = SLIDER_TRACK_H
+    t_top = cy - th // 2
+    t_bot = t_top + th
 
-    n = hi - lo + 1                          # 段数 = 可取值的个数，每段正好 1%
-    span = bar.right - bar.left
-    filled = pct - lo + 1
-    for i in range(n):
-        x0 = bar.left + (i * span) // n
-        x1 = bar.left + ((i + 1) * span) // n - SLIDER_SEG_GAP
-        if x1 <= x0:
-            x1 = x0 + 1
-        seg = wt.RECT(x0, bar.top, x1, bar.bottom)
-        if i < filled:
-            user32.FillRect(hdc, byref(seg), _brush(fill_c))
+    # 手柄：悬停/按下时放大一圈，和音量条一样有反馈
+    rad = SLIDER_THUMB_R_HOT if (hot or selected) else SLIDER_THUMB_R
+    cx = pct_to_thumb_x(pct, lo, hi, rc)
+    # 取到两端时手柄会略微探出轨道，别让它被菜单项边缘裁掉
+    cx = max(rc.left + rad + 1, min(rc.right - rad - 1, cx))
 
-    # 外描边（1px，用 FillRect 画四条边，避免额外 GDI 对象）
-    user32.FillRect(hdc, byref(wt.RECT(bar.left, bar.top, bar.right, bar.top + 1)),
-                   _brush(edge_c))
-    user32.FillRect(hdc, byref(wt.RECT(bar.left, bar.bottom - 1, bar.right, bar.bottom)),
-                   _brush(edge_c))
+    # 1) 整条轨道（底色）
+    _fill_capsule(hdc, t_left, t_top, t_right, t_bot, track_c)
+    # 2) 已填充部分：从左端一直连到手柄圆心
+    if cx > t_left:
+        _fill_capsule(hdc, t_left, t_top, cx, t_bot, fill_c)
+    # 3) 手柄：先画稍大一圈的外圈做出描边感，再叠上本体
+    _fill_circle(hdc, cx, cy, rad, ring_c)
+    _fill_circle(hdc, cx, cy, max(1, rad - 1), thumb_c)
 
     gdi32.SelectObject(hdc, old_font)
     gdi32.SetBkMode(hdc, old_mode)
@@ -933,29 +1491,216 @@ def draw_menu_slider(dis, label: str, lo: int, hi: int, pct: int):
 class MenuSlider:
     """托盘菜单里的一个 owner-draw 滑块。"""
 
-    __slots__ = ("cid", "label", "lo", "hi", "get", "set", "pos", "hmenu")
+    __slots__ = ("cid", "label", "lo", "hi", "get", "set", "fmt", "pos", "hmenu")
 
-    def __init__(self, cid, label, lo, hi, getter, setter):
+    def __init__(self, cid, label, lo, hi, getter, setter, fmt=None):
         self.cid = int(cid)
         self.label = label
         self.lo = int(lo)
         self.hi = int(hi)
-        self.get = getter            # () -> int  当前百分比
+        self.get = getter            # () -> int  当前档位
         self.set = setter            # (int) -> None
+        self.fmt = fmt or fmt_pct    # (int) -> str  右下角数值怎么显示
         self.pos = -1                # 菜单里的位置（0 基）
         self.hmenu = None
 
+    def text(self) -> str:
+        """当前值在菜单里显示的文本（百分比 / 一位小数）。"""
+        return self.fmt(int(self.get()))
+
     def hit_frac_to_pct(self, x: int, rc) -> int:
-        """把鼠标 x 换算成 1% 步进的整数值。"""
-        x0 = rc.left + SLIDER_PAD_X
-        x1 = rc.right - SLIDER_PAD_X - 1
-        span = max(1, x1 - x0)
-        frac = (x - x0) / span
-        if frac < 0.0:
-            frac = 0.0
-        elif frac > 1.0:
-            frac = 1.0
-        return max(self.lo, min(self.hi, self.lo + int(round(frac * (self.hi - self.lo)))))
+        """把鼠标 x 换算成 1% 步进的整数值。
+
+        必须和绘制共用同一套坐标（二者都基于 _track_geom），
+        否则会出现「点在这里、手柄却停在那里」。
+        """
+        return x_to_pct(x, self.lo, self.hi, rc)
+
+
+# --------------------------------------------------------------------------
+# 数值输入框（托盘菜单里「渐隐时间…」点开后弹出）
+#
+# 为什么手搓而不用 DialogBoxIndirectParam：这里只需要「一个编辑框 + 确定/取消」，
+# 而内存里拼 DLGTEMPLATE（可变长数组 + 对齐）比直接建窗口更难维护。
+# Enter / Esc / Tab 交给 IsDialogMessage 处理，行为与系统对话框一致。
+# --------------------------------------------------------------------------
+WM_NCDESTROY = 0x0082
+WM_SETFONT = 0x0030
+EM_SETSEL = 0x00B1
+SW_SHOW = 5
+WS_POPUP, WS_CAPTION, WS_SYSMENU = 0x80000000, 0x00C00000, 0x00080000
+WS_CHILD, WS_VISIBLE, WS_BORDER, WS_TABSTOP = 0x40000000, 0x10000000, 0x00800000, 0x00010000
+WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT = 0x00000200, 0x00010000
+ES_NUMBER, ES_AUTOHSCROLL = 0x2000, 0x0080
+BS_DEFPUSHBUTTON, BS_PUSHBUTTON = 0x00000001, 0x00000000
+SS_LEFT = 0x00000000
+IDC_NUM_EDIT, IDC_NUM_OK, IDC_NUM_CANCEL = 1001, 1002, 1003
+ERROR_CLASS_ALREADY_EXISTS = 1410
+
+user32.SendMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+user32.SendMessageW.restype = c_ssize_t
+user32.SetFocus.argtypes = [wt.HWND]
+user32.ShowWindow.argtypes = [wt.HWND, ctypes.c_int]
+user32.DestroyWindow.argtypes = [wt.HWND]
+user32.DestroyWindow.restype = wt.BOOL
+user32.IsDialogMessageW.argtypes = [wt.HWND, ctypes.POINTER(wt.MSG)]
+user32.IsDialogMessageW.restype = wt.BOOL
+user32.GetDlgItem.argtypes = [wt.HWND, ctypes.c_int]
+user32.GetDlgItem.restype = wt.HWND
+kernel32.GetLastError.restype = wt.DWORD
+
+
+class NumberInputBox:
+    """一个小巧的模态数值输入框：说明 + 编辑框 + 单位 + 确定/取消。
+
+        v = NumberInputBox(parent_hwnd, "渐隐时间", "渐隐时长（毫秒）：", "ms",
+                           500, 1, 5000).show()
+        # 点「确定」-> int（已夹紧）；「取消」/ 关窗 -> None
+    """
+
+    _cls_name = None
+    _proc_ref = None
+    _by_hwnd = {}
+
+    def __init__(self, parent, title, prompt, unit, value, lo, hi):
+        self.parent = parent
+        self.title = title
+        self.prompt = prompt
+        self.unit = unit
+        self.value = int(value)
+        self.lo, self.hi = int(lo), int(hi)
+        self.hwnd = 0
+        self.edit = 0
+        self.result = None
+
+    # ---- 窗口类只注册一次 ----
+    @classmethod
+    def _ensure_class(cls):
+        if cls._cls_name:
+            return cls._cls_name
+        cls._proc_ref = WNDPROC(NumberInputBox._wndproc)   # 必须留引用
+        hinst = kernel32.GetModuleHandleW(None)
+        wc = WNDCLASSW()
+        wc.style = 0
+        wc.lpfnWndProc = ctypes.cast(cls._proc_ref, ctypes.c_void_p)
+        wc.hInstance = hinst
+        wc.hbrBackground = user32.GetSysColorBrush(COLOR_MENU)
+        wc.lpszClassName = "WinGlassNumberInput"
+        if not user32.RegisterClassW(byref(wc)):
+            if kernel32.GetLastError() != ERROR_CLASS_ALREADY_EXISTS:
+                return None
+        cls._cls_name = "WinGlassNumberInput"
+        return cls._cls_name
+
+    # ---- 窗口过程 ----
+    @staticmethod
+    def _wndproc(hwnd, msg, wparam, lparam):
+        try:
+            me = NumberInputBox._by_hwnd.get(_h(hwnd))
+            if me is not None:
+                if msg == WM_COMMAND:
+                    cid = int(wparam) & 0xFFFF
+                    if cid == IDC_NUM_OK:
+                        me._accept()
+                        return 0
+                    if cid == IDC_NUM_CANCEL:
+                        me._finish()
+                        return 0
+                elif msg == WM_CLOSE:
+                    me._finish()
+                    return 0
+                elif msg in (WM_DESTROY, WM_NCDESTROY):
+                    NumberInputBox._by_hwnd.pop(_h(hwnd), None)
+                    # 唤醒外层那个嵌套消息循环（它正阻塞在 GetMessage 上）
+                    user32.PostMessageW(me.parent, WM_NULL, 0, 0)
+        except Exception:
+            pass
+        return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+    def _accept(self):
+        raw = _window_text(self.edit) if self.edit else ""
+        digits = "".join(ch for ch in raw if ch.isdigit())
+        try:
+            v = int(digits) if digits else self.value
+        except Exception:
+            v = self.value
+        self.result = max(self.lo, min(self.hi, v))     # 越界一律夹紧，不报错打断
+        self._finish()
+
+    def _finish(self):
+        h = self.hwnd
+        self.hwnd = 0
+        if h:
+            user32.DestroyWindow(h)
+
+    def show(self):
+        cls = self._ensure_class()
+        if not cls:
+            return None
+        hinst = kernel32.GetModuleHandleW(None)
+        w, h = 268, 132
+
+        # 放到光标所在显示器的正中
+        pt = wt.POINT()
+        user32.GetCursorPos(byref(pt))
+        x, y = pt.x - w // 2, pt.y - h // 2
+        try:
+            mon = user32.MonitorFromWindow(self.parent or None, MONITOR_DEFAULTTONEAREST)
+            mi = MONITORINFO()
+            mi.cbSize = ctypes.sizeof(MONITORINFO)
+            if mon and user32.GetMonitorInfoW(mon, byref(mi)):
+                x = mi.rcWork.left + ((mi.rcWork.right - mi.rcWork.left) - w) // 2
+                y = mi.rcWork.top + ((mi.rcWork.bottom - mi.rcWork.top) - h) // 2
+        except Exception:
+            pass
+
+        self.hwnd = _h(user32.CreateWindowExW(
+            WS_EX_CONTROLPARENT, cls, self.title,
+            WS_POPUP | WS_CAPTION | WS_SYSMENU, x, y, w, h,
+            self.parent, None, hinst, None))
+        if not self.hwnd:
+            return None
+        NumberInputBox._by_hwnd[self.hwnd] = self
+
+        def mk(kind, text, style, cx, cy, cw, ch, cid):
+            return _h(user32.CreateWindowExW(0, kind, text, style, cx, cy, cw, ch,
+                                             self.hwnd, cid, hinst, None))
+
+        mk("STATIC", self.prompt, SS_LEFT | WS_CHILD | WS_VISIBLE,
+           16, 14, w - 32, 18, 0)
+        self.edit = mk("EDIT", "%d" % self.value,
+                       WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER | ES_AUTOHSCROLL,
+                       16, 40, 150, 24, IDC_NUM_EDIT)
+        mk("STATIC", self.unit, SS_LEFT | WS_CHILD | WS_VISIBLE,
+           176, 44, 68, 18, 0)
+        mk("BUTTON", "确定", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+           w - 172, 82, 76, 28, IDC_NUM_OK)
+        mk("BUTTON", "取消", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+           w - 88, 82, 76, 28, IDC_NUM_CANCEL)
+
+        # 用系统菜单字体，别落回默认的宋体
+        hf = _menu_font()
+        for cid in (IDC_NUM_EDIT, IDC_NUM_OK, IDC_NUM_CANCEL):
+            h = user32.GetDlgItem(self.hwnd, cid)
+            if h:
+                user32.SendMessageW(h, WM_SETFONT, hf, True)
+        if self.edit:
+            user32.SendMessageW(self.edit, EM_SETSEL, 0, -1)   # 全选，直接改数字
+            user32.SetFocus(self.edit)
+        user32.ShowWindow(self.hwnd, SW_SHOW)
+
+        # 嵌套消息循环：靠 IsDialogMessage 把 Enter/Esc/Tab 当对话框处理。
+        # ⚠️ 不能 PostQuitMessage —— 这条线程还跑着托盘的 GetMessage 循环，
+        #    会把整个程序一起退掉。
+        msg = wt.MSG()
+        while self.hwnd and user32.IsWindow(self.hwnd):
+            if user32.GetMessageW(byref(msg), None, 0, 0) <= 0:
+                break
+            if not user32.IsDialogMessageW(self.hwnd, byref(msg)):
+                user32.TranslateMessage(byref(msg))
+                user32.DispatchMessageW(byref(msg))
+        NumberInputBox._by_hwnd.pop(self.hwnd, None)
+        return self.result
 
 
 class TrayIcon:
@@ -1121,20 +1866,46 @@ class TrayIcon:
             pass
         return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
-    def _popup(self):
+    def _build_menu(self):
+        """只负责「拼菜单」，不负责「弹菜单」。
+
+        拆出来是为了让菜单内容可测：TrackPopupMenu 会阻塞，弹出去就没法在
+        同一个线程里断言菜单里到底有哪些项、文字是什么。现在测试可以直接
+        调这个函数，再拿 GetMenuStringW 把每一项读回来核对。
+        返回菜单句柄；调用方负责 DestroyMenu。
+        """
         m = user32.CreatePopupMenu()
         if not m:
-            return
+            return 0
         paused = self.engine.paused
+        cfg = self.engine.cfg
         user32.AppendMenuW(m, MF_STRING | (MF_CHECKED if paused else 0), CMD_TOGGLE,
                            "已暂停（点击继续）" if paused else "暂停（所有窗口恢复 100%）")
         user32.AppendMenuW(m, MF_STRING, CMD_RESTORE, "立即把所有窗口恢复 100%")
+        user32.AppendMenuW(m, MF_STRING | (MF_CHECKED if cfg.hover else 0),
+                           CMD_HOVER,
+                           "悬停半透明（未聚焦窗口 → %d%%）" % cfg.hover_pct)
+        user32.AppendMenuW(m, MF_STRING | (MF_CHECKED if cfg.fullscreen_lock else 0),
+                           CMD_FULLSCREEN,
+                           "全屏窗口固定 100%（不受最高值设置影响）"
+                           if cfg.fullscreen_lock else
+                           "全屏窗口固定 100%（当前：完全不接管全屏）")
         user32.AppendMenuW(m, MF_SEPARATOR, 0, None)
         self._append_sliders(m)
         user32.AppendMenuW(m, MF_SEPARATOR, 0, None)
+        # 渐隐时间：普通菜单项。\t 之后那段会被菜单自动右对齐，
+        # 正好和上面滑块右边的「40%」列对齐。
+        user32.AppendMenuW(m, MF_STRING, CMD_FADE_MS,
+                           "渐隐时间…\t%d ms" % self.engine.cfg.fade_ms)
+        user32.AppendMenuW(m, MF_SEPARATOR, 0, None)
         user32.AppendMenuW(m, MF_STRING, CMD_LOG, "打开日志")
         user32.AppendMenuW(m, MF_STRING, CMD_QUIT, "退出（还原全部窗口）")
+        return m
 
+    def _popup(self):
+        m = self._build_menu()
+        if not m:
+            return
         pt = wt.POINT()
         user32.GetCursorPos(byref(pt))
         self._menu_hwnd = 0
@@ -1160,7 +1931,7 @@ class TrayIcon:
 
     # ---------------- 滑块：建项 / 测量 / 绘制 ----------------
     def _append_sliders(self, m):
-        """把两个滑块作为 owner-draw 菜单项插进菜单。"""
+        """把三个滑块作为 owner-draw 菜单项插进菜单。"""
         cfg = self.engine.cfg
         sliders = [
             MenuSlider(CMD_SLIDE_INACTIVE, "非聚焦最低透明度",
@@ -1171,6 +1942,16 @@ class TrayIcon:
                        cfg.ACTIVE_MIN_PCT, cfg.ACTIVE_MAX_PCT,
                        lambda: self.engine.cfg.active_pct,
                        lambda v: self.engine.set_alpha_targets(active_pct=v)),
+            # 悬停插值系数（v1.5.0）：内部档位 0~10，显示成 0.0~1.0。
+            # 悬停值 = 最低 + (最高 − 最低) × 系数，所以拖它就能实时看到
+            # 上面那行「悬停半透明（未聚焦窗口 → xx%）」跟着变。
+            MenuSlider(CMD_SLIDE_HOVER, "悬停插值系数",
+                       0, cfg.HOVER_RATIO_UNITS,
+                       lambda: int(round(
+                           self.engine.cfg.hover_ratio * cfg.HOVER_RATIO_UNITS)),
+                       lambda v: self.engine.set_hover_ratio(
+                           v / float(cfg.HOVER_RATIO_UNITS)),
+                       fmt_ratio_units),
         ]
         self._sliders = []
         for sl in sliders:
@@ -1224,7 +2005,10 @@ class TrayIcon:
             sl = self._slider_by_id(dis.itemID)
             if sl is None:
                 return
-            draw_menu_slider(dis, sl.label, sl.lo, sl.hi, int(sl.get()))
+            # hot：悬停（选中）或正在拖动时，手柄放大一圈，与音量条一致
+            hot = bool(self._dragging) or bool(dis.itemState & ODS_SELECTED)
+            draw_menu_slider(dis, sl.label, sl.lo, sl.hi, int(sl.get()), hot,
+                             sl.text())
         except Exception as e:
             if self.engine.cfg.verbose:
                 print("[win_glass] 绘制滑块失败：%r" % (e,))
@@ -1253,8 +2037,16 @@ class TrayIcon:
         try:
             if nCode == MSGF_MENU and lParam and self._hook:
                 msg = ctypes.cast(lParam, ctypes.POINTER(MENUMSG)).contents
-                if not self._menu_hwnd and msg.hwnd:
+                # ⚠️ 只认真正的菜单窗口（#32768）。MSGF_MENU 回调里的 msg.hwnd 可能是
+                # 本线程正在处理的**任意**窗口 —— 踩过：钩子看到的头一条消息，hwnd 是
+                # shell 的 SystemUserAdapterWindowClass，把它当成菜单窗口缓存下来之后，
+                # InvalidateRect 全打在无关窗口上，菜单永远不会重绘。
+                # 症状就是「拖动时数值和进度条怎么都不刷新，指针一移出去才刷新」。
+                if not self._menu_hwnd and msg.hwnd and _win_class(msg.hwnd) == MENU_CLASS:
                     self._menu_hwnd = _h(msg.hwnd)
+                    if DBG_REDRAW:
+                        print("[dbg] captured _menu_hwnd=0x%X class=%s (msg=0x%04X)"
+                              % (self._menu_hwnd, _win_class(msg.hwnd), int(msg.message)))
                 mtype = int(msg.message)
                 if mtype in (WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP,
                              WM_MOUSEWHEEL, WM_KEYDOWN):
@@ -1296,6 +2088,11 @@ class TrayIcon:
                 self._dragging = False
             return False
         sl, rc = hit
+        if DBG_REDRAW:
+            print("[dbg] click mtype=0x%04X pt=(%d,%d) rc=(%d,%d)-(%d,%d) "
+                  "-> pct=%d dragging=%s"
+                  % (mtype, pt.x, pt.y, rc.left, rc.top, rc.right, rc.bottom,
+                     sl.hit_frac_to_pct(pt.x, rc), self._dragging))
         if mtype == WM_MOUSEWHEEL:
             # 滚轮增量在 lParam 的高 16 位！wParam 装的是光标坐标（低=x 高=y），
             # 从 wParam 取增量会拿到 y 坐标，滚多少都不动。
@@ -1364,23 +2161,62 @@ class TrayIcon:
         return None
 
     def _apply_slider(self, sl, rc, pct):
-        """夹紧到合法范围后写回配置；值没变就不重绘，避免无谓闪烁。"""
-        pct = max(sl.lo, min(sl.hi, int(pct)))      # 取整 + 夹紧 → 步进恒为 1%
+        """夹紧到合法范围后写回配置；值没变就不重绘，避免无谓闪烁。
+
+        这里传进来的都是**档位**（整数），不是显示值：两个透明度滑块是
+        「1 档 = 1%」，悬停插值系数是「1 档 = 0.1」。
+        """
+        pct = max(sl.lo, min(sl.hi, int(pct)))      # 取整 + 夹紧 → 步进恒定
         if pct == int(sl.get()):
             return
         sl.set(pct)
+        if DBG_REDRAW:
+            print("[dbg] apply %s -> %s" % (sl.label, sl.fmt(pct)))
         self._redraw_item(rc)
 
+    def _resolve_menu_hwnd(self, rc=None):
+        """定位真正的菜单窗口（窗口类 #32768）。
+
+        不能只信钩子里缓存的那个句柄：MSGF_MENU 回调的 msg.hwnd 可能是线程里任意窗口。
+        这里逐级校验并回填缓存——缓存 → FindWindowW → 按菜单项中心点取窗口。
+        """
+        for cand in (self._menu_hwnd, _h(user32.FindWindowW(MENU_CLASS, None))):
+            if cand and user32.IsWindow(cand) and _win_class(cand) == MENU_CLASS:
+                self._menu_hwnd = cand
+                return cand
+        if rc is not None:
+            pt = wt.POINT((rc.left + rc.right) // 2, (rc.top + rc.bottom) // 2)
+            cand = _h(user32.WindowFromPoint(pt))
+            if cand and _win_class(cand) == MENU_CLASS:
+                self._menu_hwnd = cand
+                return cand
+        self._menu_hwnd = 0
+        return 0
+
     def _redraw_item(self, rc):
-        """就地重绘某个菜单项，让分段条与数值实时跟手。"""
-        hwnd = self._menu_hwnd
+        """就地重绘某个菜单项，让滑块与数值实时跟手。
+
+        ⚠️ 必须打在**菜单窗口**（#32768）上。打在别的窗口上不会报任何错，
+        但菜单永远不会重绘 —— 这正是「拖动时数值/进度条不刷新」的根因。
+        """
+        hwnd = self._resolve_menu_hwnd(rc)
         if not hwnd:
+            if DBG_REDRAW:
+                print("[dbg] redraw SKIP: 找不到菜单窗口")
             return
         local = wt.RECT(rc.left, rc.top, rc.right, rc.bottom)
-        user32.MapWindowPoints(None, hwnd,
-                               ctypes.cast(byref(local), ctypes.POINTER(wt.POINT)), 2)
-        user32.InvalidateRect(hwnd, byref(local), False)
-        user32.UpdateWindow(hwnd)
+        n = user32.MapWindowPoints(None, hwnd,
+                                   ctypes.cast(byref(local), ctypes.POINTER(wt.POINT)), 2)
+        # RedrawWindow(RDW_UPDATENOW) 比 InvalidateRect+UpdateWindow 更可靠：
+        # 菜单窗口的 WM_PAINT 有自己的节奏，RDW_UPDATENOW 会强制立刻同步画一遍。
+        ok = user32.RedrawWindow(hwnd, byref(local), None,
+                                 RDW_INVALIDATE | RDW_UPDATENOW)
+        if DBG_REDRAW:
+            print("[dbg] redraw hwnd=0x%X class=%s map=%d rw=%s "
+                  "local=(%d,%d)-(%d,%d) draw_total=%d"
+                  % (hwnd, _win_class(hwnd), n, bool(ok),
+                     local.left, local.top, local.right, local.bottom,
+                     self.msg_counts["draw"]))
 
     def _invoke(self, cid):
         if cid in (CMD_SLIDE_INACTIVE, CMD_SLIDE_ACTIVE):
@@ -1399,6 +2235,20 @@ class TrayIcon:
                 pass
         elif cid == CMD_QUIT:
             self.engine.request_quit()
+        elif cid == CMD_HOVER:
+            self.engine.set_hover(not self.engine.cfg.hover)
+        elif cid == CMD_FULLSCREEN:
+            self.engine.set_fullscreen_lock(not self.engine.cfg.fullscreen_lock)
+        elif cid == CMD_FADE_MS:
+            self._ask_fade_ms()
+
+    def _ask_fade_ms(self):
+        """弹数值输入框改渐隐时长（ms）。取消（返回 None）就什么都不做。"""
+        cfg = self.engine.cfg
+        v = NumberInputBox(self.hwnd, "渐隐时间", "渐隐时长（毫秒）：", "ms",
+                           cfg.fade_ms, cfg.FADE_MIN_MS, cfg.FADE_MAX_MS).show()
+        if v is not None:
+            self.engine.set_fade_ms(v)
 
 
 # --------------------------------------------------------------------------
@@ -1427,6 +2277,10 @@ class GlassEngine:
         self._cfg_lock = threading.Lock()
         self._cfg_saved_at = 0.0
         self._cfg_dirty = False
+        # ---- 悬停状态 ----
+        self._hover_hwnd = 0            # 此刻被鼠标压住的、已接管的顶层窗口
+        self._hover_cursor = None       # 上次采样到的光标坐标（没动就跳过判定）
+        self._hover_at = 0.0            # 上次轮询时刻（节流用）
 
     # ---------------- 滑块取值 ----------------
     def set_alpha_targets(self, inactive_pct=None, active_pct=None):
@@ -1441,6 +2295,77 @@ class GlassEngine:
                 self.cfg.active_pct = active_pct
         self._dirty.set()
         self.save_cfg()
+
+    def set_fade_ms(self, fade_ms):
+        """托盘菜单改渐隐时长后调用。
+
+        除了写配置，还要把**正在进行的缓动**按新时长重排时间轴：
+        否则改完要等下一次切换才生效，用户会以为没生效。做法是保持「已完成
+        进度」不变，只把 t0 往回推到与新时长匹配的位置。
+        """
+        old_ms = self.cfg.fade_ms
+        with self.lock:
+            self.cfg.fade_ms = fade_ms
+            new_dur = self.cfg.fade_ms / 1000.0
+            now = time.perf_counter()
+            for st in self.states.values():
+                if st.dur <= 0.0 or st.t0 <= 0.0:
+                    continue
+                prog = (now - st.t0) / st.dur
+                if prog >= 1.0:
+                    continue
+                st.dur = new_dur
+                st.t0 = now - prog * new_dur
+        self._dirty.set()
+        self.save_cfg(force=True)
+        if self.cfg.verbose and self.cfg.fade_ms != old_ms:
+            print(f"[win_glass] 渐隐时长 {old_ms}ms -> {self.cfg.fade_ms}ms")
+
+    def set_hover(self, flag):
+        """开关「悬停半透明」（托盘菜单 / 测试用）。
+
+        关掉时顺手把 _hover_cursor 清空 —— 再打开时立刻重新判定一次光标下的
+        窗口，否则要到用户下次动鼠标才会生效，看起来像"开了没反应"。
+        """
+        with self.lock:
+            self.cfg.hover = bool(flag)
+            self._hover_cursor = None
+            if not self.cfg.hover:
+                # 别让已经压暗/提亮的窗口停在悬停值上：下一次 _update_targets
+                # 会把它们拉回各自的基础目标
+                self._hover_hwnd = 0
+        self._dirty.set()
+        self.save_cfg(force=True)
+        print("[win_glass] 悬停半透明：%s（未聚焦窗口 %s → %d%%）"
+              % ("开" if self.cfg.hover else "关",
+                 self.cfg.inactive_pct, self.cfg.hover_pct))
+
+    def set_hover_ratio(self, ratio):
+        """改悬停插值比例（0=等于最低，0.8=默认偏向最高，1=等于最高）。"""
+        with self.lock:
+            self.cfg.hover_ratio = ratio
+        self._dirty.set()
+        self.save_cfg(force=True)
+        if self.cfg.verbose:
+            print("[win_glass] 悬停比例 %.2f → 悬停值 %d%%"
+                  % (self.cfg.hover_ratio, self.cfg.hover_pct))
+
+    def set_fullscreen_lock(self, flag):
+        """开关「全屏窗口固定 100%」（托盘菜单 / 测试用）。
+
+        关掉 = 全屏窗口完全不接管（v1.3.0 及以前的行为）。这个开关会改变
+        **可管理集合**（见 is_manageable），所以不在这里手工增删窗口 —— 交给
+        下一次 `_refresh_window_list()` 全量重扫：新放开的会被接管、被排除的会
+        走 `_restore()` 还原。代价是最多 `rescan_interval`（默认 0.5s）的延迟，
+        换来的是只有一条代码路径负责"集合变了怎么办"。
+        """
+        with self.lock:
+            self.cfg.fullscreen_lock = bool(flag)
+        self._dirty.set()
+        self.save_cfg(force=True)
+        print("[win_glass] 全屏窗口：%s"
+              % ("接管并固定在 100%（不受最高值设置影响）"
+                 if self.cfg.fullscreen_lock else "完全不接管（原样保留）"))
 
     def save_cfg(self, force: bool = False):
         """写配置文件。拖动滑块时会频繁触发，所以节流到 0.3s 一次；
@@ -1490,6 +2415,16 @@ class GlassEngine:
         alpha = int(round(st.cur * 255.0))
         alpha = 0 if alpha < 0 else (255 if alpha > 255 else alpha)
         if alpha == st.applied:
+            return True
+        # ---- 全屏锁 100% 的快捷路径：本来没分层就一个字都不改 ----
+        # 给一个非分层窗口硬加 WS_EX_LAYERED 会丢掉 DWM 的独立翻转/硬件叠加
+        # 优化（全屏游戏可能掉帧），而 alpha=255 的观感与非分层窗口完全一致
+        # —— 也就是说"加"这个动作除了副作用没有任何收益。
+        # 反过来：我们自己之前给它分过层（先前是非全屏、被压暗过），或者它
+        # 本来就带 LAYERED（应用自己的分层），那就必须真的把 alpha 顶到 255。
+        if (alpha == 255 and st.fullscreen and not st.layered_owned
+                and not (_GetWindowLong(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED)):
+            st.applied = alpha
             return True
         try:
             if not self._ensure_layered(st):
@@ -1567,18 +2502,64 @@ class GlassEngine:
         if self.cfg.verbose:
             print(f"  [接管] 0x{hwnd:X} {int(target*100)}%  ({st.cls})  {st.title[:40]}")
 
+    # ---------------- 悬停 ----------------
+    def _poll_hover(self, now: float):
+        """轮询鼠标，更新「此刻被压住的窗口」self._hover_hwnd。
+
+        为什么是轮询而不是事件：Win32 根本没有「鼠标进入/离开任意窗口」的全局
+        事件。TrackMouseEvent 只对自己窗口有效；WH_MOUSE_LL 要多一个低级钩子，
+        还会把鼠标消息拉进本进程的消息路径 —— 为了一个视觉效果不值得。
+
+        开销：50ms 一次 GetCursorPos，几十微秒；**光标没动的那一轮直接返回**，
+        连 WindowFromPoint 都不做。常驻运行实测 CPU 占用无可测变化。
+        """
+        if not self.cfg.hover:
+            if self._hover_hwnd:
+                self._hover_hwnd = 0
+                self._dirty.set()
+            return
+        if (now - self._hover_at) < self.cfg.hover_interval:
+            return
+        self._hover_at = now
+        cur = cursor_pos()
+        if cur is None:
+            return
+        if cur == self._hover_cursor:
+            return                     # 光标没动 → 悬停目标不可能变
+        self._hover_cursor = cur
+        cand = cursor_root_window()
+        with self.lock:
+            # 只管我们已接管的窗口：桌面、任务栏、别人窗口一律视作「没有悬停」
+            known = cand in self.states
+        cand = cand if known else 0
+        if cand != self._hover_hwnd:
+            old, self._hover_hwnd = self._hover_hwnd, cand
+            self._dirty.set()          # 交给主循环统一重算，回调里不做重活
+            if self.cfg.verbose:
+                print("[win_glass] 悬停 %s -> %s"
+                      % ("0x%X" % old if old else "无",
+                         "0x%X" % cand if cand else "无"))
+
+    def _target_for(self, hwnd: int, *, is_fg=False, top=False, zoomed=False,
+                    fullscreen=False, hover_hwnd=0):
+        """见模块级 target_for()——这里只是把 cfg 填进去，保证两边同一份逻辑。"""
+        return target_for(self.cfg, hwnd, is_fg=is_fg, top=top, zoomed=zoomed,
+                          fullscreen=fullscreen, hover_hwnd=hover_hwnd)
+
     def _refresh_window_list(self):
         """全量枚举：发现新窗口、清理已消失的窗口。"""
         alive = set(scan_windows(self.cfg, self.self_pid))
         fg = _h(user32.GetForegroundWindow())
+        # 窗口可能正好在光标下面冒出来/消失（而光标没动）。清掉坐标缓存，
+        # 逼 _poll_hover 下次重新判定，不然悬停状态会一直停在旧结论上。
+        self._hover_cursor = None
         with self.lock:
             for hwnd in alive:
                 if hwnd not in self.states:
-                    st_tmp = WinState(hwnd)
-                    ex = _GetWindowLong(hwnd, GWL_EXSTYLE)
-                    top = bool(ex & WS_EX_TOPMOST)
-                    tgt = self.cfg.active_alpha if (hwnd == fg or top) \
-                        else self.cfg.inactive_alpha
+                    top, zoomed, fs = read_window_state(hwnd)
+                    tgt, _why, _hv = self._target_for(
+                        hwnd, is_fg=(hwnd == fg), top=top, zoomed=zoomed,
+                        fullscreen=fs, hover_hwnd=self._hover_hwnd)
                     self._adopt(hwnd, tgt)
             for hwnd in list(self.states):
                 if hwnd not in alive:
@@ -1586,21 +2567,26 @@ class GlassEngine:
                     self._restore(st)
 
     def _update_targets(self):
-        """只读式重算目标（含置顶检测），很轻。暂停时不做任何改动。"""
+        """只读式重算目标（含全屏/最大化/置顶/悬停检测）。
+
+        每轮每个窗口多花 3 次 user32 调用（GetWindowRect + MonitorFromWindow +
+        GetMonitorInfoW）来判断全屏；默认 7 次/秒、窗口数十几，实测可忽略。
+        """
         if self.paused:
             return
         fg = _h(user32.GetForegroundWindow())
         with self.lock:
+            hover_hwnd = self._hover_hwnd
             for hwnd, st in self.states.items():
                 if not user32.IsWindow(hwnd):
                     continue
-                ex = _GetWindowLong(hwnd, GWL_EXSTYLE)
-                top = bool(ex & WS_EX_TOPMOST)
+                top, zoomed, fs = read_window_state(hwnd, st)
                 is_fg = (hwnd == fg)
-                reason = "聚焦" if is_fg else ("置顶" if top else "未聚焦")
-                st.topmost, st.is_fg = top, is_fg
-                tgt = self.cfg.active_alpha if (is_fg or top) \
-                    else self.cfg.inactive_alpha
+                st.is_fg = is_fg
+                tgt, reason, hv = self._target_for(
+                    hwnd, is_fg=is_fg, top=top, zoomed=zoomed,
+                    fullscreen=fs, hover_hwnd=hover_hwnd)
+                st.hover = hv
                 self._set_target(st, tgt, reason)
 
     # ---------------- 动画 ----------------
@@ -1719,8 +2705,19 @@ class GlassEngine:
                 self.tray = None
 
         print(f"[win_glass] v{APP_VER} 启动  未聚焦={self.cfg.inactive_pct}%  "
-              f"聚焦/置顶={self.cfg.active_pct}%  渐变={self.cfg.fade_ms}ms  "
+              f"聚焦/最大化/置顶={self.cfg.active_pct}%  "
+              f"全屏=100%(固定)  渐变={self.cfg.fade_ms}ms  "
               f"{self.cfg.fps}fps  配置={self.cfg.cfg_path}")
+        print("[win_glass] 全屏窗口：%s"
+              % ("接管并固定在 100%（不受最高值设置影响）"
+                 if self.cfg.fullscreen_lock else "完全不接管（原样保留）"))
+        if self.cfg.hover:
+            print(f"[win_glass] 悬停半透明：开   未聚焦窗口被鼠标压住时 "
+                  f"{self.cfg.inactive_pct}% -> {self.cfg.hover_pct}% "
+                  f"(最高/最低插值 {self.cfg.hover_ratio:.2f})  "
+                  f"轮询={self.cfg.hover_interval * 1000:.0f}ms")
+        else:
+            print("[win_glass] 悬停半透明：关")
         self._refresh_window_list()
         hint = "托盘右键退出" if self.tray else "Ctrl+C 退出"
         print(f"[win_glass] 首批接管 {len(self.states)} 个窗口，开始实时跟随。（{hint}）")
@@ -1733,6 +2730,8 @@ class GlassEngine:
         try:
             while not self._stop.is_set():
                 now = time.perf_counter()
+                # 悬停：自带节流；光标没动时是零成本空转，也不动 _dirty
+                self._poll_hover(now)
                 if self._dirty.is_set() or (now - last_scan) >= self.cfg.scan_interval:
                     self._dirty.clear()
                     last_scan = now
@@ -1783,26 +2782,42 @@ class GlassEngine:
 def list_windows(cfg: GlassConfig):
     self_pid = os.getpid()
     fg = _h(user32.GetForegroundWindow())
+    hwnds = scan_windows(cfg, self_pid)
+    # 悬停候选：光标压着的那个顶层窗口，且必须在可管理集合里
+    hover_hwnd = cursor_root_window() if cfg.hover else 0
+    if hover_hwnd and hover_hwnd not in hwnds:
+        hover_hwnd = 0
     rows = []
-    for hwnd in scan_windows(cfg, self_pid):
-        ex = _GetWindowLong(hwnd, GWL_EXSTYLE)
-        top = bool(ex & WS_EX_TOPMOST)
-        is_fg = (hwnd == fg)
-        if is_fg:
-            tgt, why = cfg.active_pct, "聚焦"
-        elif top:
-            tgt, why = cfg.active_pct, "置顶"
-        else:
-            tgt, why = cfg.inactive_pct, "未聚焦"
-        rows.append((hwnd, _class_name(hwnd), _window_text(hwnd), tgt, why))
+    for hwnd in hwnds:
+        top, zoomed, fs = read_window_state(hwnd)
+        alpha, why, _hv = target_for(cfg, hwnd, is_fg=(hwnd == fg), top=top,
+                                     zoomed=zoomed, fullscreen=fs,
+                                     hover_hwnd=hover_hwnd)
+        flags = "".join(("F" if fs else "-", "Z" if zoomed else "-",
+                         "T" if top else "-"))
+        rows.append((hwnd, _class_name(hwnd), _window_text(hwnd),
+                     int(round(alpha * 100)), why, flags))
     rows.sort(key=lambda r: (-r[3], r[1]))
     print(f"可管理窗口 {len(rows)} 个   未聚焦目标={cfg.inactive_pct}%   "
-          f"聚焦/置顶目标={cfg.active_pct}%")
+          f"聚焦/最大化/置顶目标={cfg.active_pct}%   全屏固定=100%   "
+          f"渐隐={cfg.fade_ms}ms")
+    print("判定优先级: 全屏(恒 100%，不受最高值设置影响) > 聚焦 > 最大化 > "
+          "置顶 > 悬停 > 未聚焦")
+    print("标记 F=全屏 Z=最大化 T=置顶")
+    if not cfg.fullscreen_lock:
+        print("⚠️ 全屏锁定：关 —— 全屏窗口完全不接管（--skip-fullscreen）")
+    if cfg.hover:
+        print("悬停半透明：开   未聚焦窗口 → %d%%（插值 %.2f）   此刻悬停=%s"
+              % (cfg.hover_pct, cfg.hover_ratio,
+                 ("0x%08X" % hover_hwnd) if hover_hwnd else "无"))
+    else:
+        print("悬停半透明：关")
     print("-" * 96)
-    print(f"{'HWND':>10}  {'目标':>5}  {'原因':<7} {'类名':<28} 标题")
+    print(f"{'HWND':>10}  {'目标':>5}  {'原因':<7} {'FZT':<4} {'类名':<28} 标题")
     print("-" * 96)
-    for hwnd, cls, title, tgt, why in rows:
-        print(f"0x{hwnd:08X}  {tgt:>4}%  {why:<7} {cls[:28]:<28} {title[:34]}")
+    for hwnd, cls, title, tgt, why, flags in rows:
+        print(f"0x{hwnd:08X}  {tgt:>4}%  {why:<7} {flags:<4} "
+              f"{cls[:28]:<28} {title[:34]}")
     print("-" * 96)
 
 
@@ -1850,19 +2865,31 @@ def self_test(cfg: GlassConfig):
         root.destroy()
         return 1
 
-    # 跑一段 聚焦% -> 非聚焦% -> 聚焦% 的缓动，并采样读回（单位统一为不透明度 0..1）
+    # 跑一段 聚焦% -> 非聚焦% -> 悬停% -> 非聚焦% -> 全屏% -> 非聚焦% -> 聚焦%
+    # 的缓动，并采样读回（单位统一为不透明度 0..1）
     hi, lo = cfg.active_alpha, cfg.inactive_alpha
-    print(f"[self-test] 滑块取值：非聚焦={cfg.inactive_pct}%  聚焦={cfg.active_pct}%"
-          f"（均为整数百分比）")
+    fsa = cfg.fullscreen_alpha                       # 恒定 1.0
+    hv = cfg.hover_alpha if cfg.hover else lo
+    print(f"[self-test] 滑块取值：非聚焦={cfg.inactive_pct}%  "
+          f"聚焦/最大化/置顶={cfg.active_pct}%  （均为整数百分比）")
+    print(f"[self-test] 全屏取值：{int(round(fsa * 100))}%"
+          f"（恒定，不受聚焦最高透明度 {cfg.active_pct}% 影响）"
+          + ("" if hi != fsa else "  ⚠️ 本次最高值也是 100%，该段与聚焦段数值相同"))
+    if cfg.hover:
+        print(f"[self-test] 悬停取值：{cfg.hover_pct}%"
+              f"（最高/最低插值 {cfg.hover_ratio:.2f}）")
+    else:
+        print("[self-test] 悬停半透明：关（该段退化为非聚焦值）")
     print(f"[self-test] 播放 {cfg.fade_ms}ms 缓动   {cfg.active_pct}% -> "
-          f"{cfg.inactive_pct}% -> {cfg.active_pct}%")
+          f"{cfg.inactive_pct}% -> {cfg.hover_pct}% -> {cfg.inactive_pct}% -> "
+          f"{int(round(fsa * 100))}% -> {cfg.inactive_pct}% -> {cfg.active_pct}%")
     samples = []
-    seq = [(hi, lo), (lo, hi)]
+    seq = [(hi, lo), (lo, hv), (hv, lo), (lo, fsa), (fsa, lo), (lo, hi)]
     step_ms = 50
 
     def play(leg_idx, elapsed):
         if leg_idx >= len(seq):
-            print("[self-test] 采样读回（应为平滑单调变化，无突跳）：")
+            print("[self-test] 采样读回（每段内部应平滑单调，段间瞬间即续，无突跳）：")
             print("           " + " ".join(str(s) for s in samples))
             root.after(400, root.destroy)
             return
@@ -1889,25 +2916,37 @@ def self_test(cfg: GlassConfig):
 # --------------------------------------------------------------------------
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="win_glass — 窗口透明度随聚焦状态动态变化"
-                    "（未聚焦 5~95%，聚焦/置顶 5~100%，托盘菜单可调）")
+        description="win_glass — 窗口透明度随全屏/聚焦/最大化/置顶/悬停状态动态变化"
+                    "（全屏恒定 100%，聚焦/最大化/置顶 5~100%，未聚焦 5~95%，"
+                    "悬停取最高/最低中间值，托盘菜单可调）")
     ap.add_argument("--inactive-alpha", type=float, default=None,
                     help="未聚焦窗口的不透明度，0.05~0.95（也接受 5~95），"
                          "默认取配置文件，否则 0.40")
     ap.add_argument("--active-alpha", type=float, default=None,
-                    help="聚焦 / 置顶窗口的不透明度，0.05~1.00（也接受 5~100），"
-                         "默认取配置文件，否则 1.00")
+                    help="聚焦 / 最大化 / 置顶窗口的不透明度，0.05~1.00"
+                         "（也接受 5~100），默认取配置文件，否则 1.00；"
+                         "全屏窗口不受它影响，恒为 100%%")
     ap.add_argument("--no-config", action="store_true",
                     help="既不读取也不写入配置文件（滑块改动只在本次运行有效）")
     ap.add_argument("--save-config", action="store_true",
                     help="把本次命令行参数写入配置文件后继续运行")
-    ap.add_argument("--fade-ms", type=int, default=500, help="渐变时长(ms)，默认 500")
+    ap.add_argument("--fade-ms", type=int, default=None,
+                    help="渐变时长(ms)，1~5000；不给则用配置文件里的，默认 500")
+    ap.add_argument("--no-hover", action="store_true",
+                    help="关闭「悬停半透明」（鼠标压住未聚焦窗口时不再提亮）")
+    ap.add_argument("--hover-ratio", type=float, default=None,
+                    help="悬停值在「最低→最高」之间的插值，0~1，默认 0.8")
+    ap.add_argument("--hover-interval", type=float, default=None,
+                    help="鼠标位置轮询间隔(秒)，默认 0.05；越小越跟手也越费 CPU")
     ap.add_argument("--fps", type=int, default=60, help="动画帧率，默认 60")
     ap.add_argument("--scan", type=float, default=0.15, help="目标重算间隔(秒)，默认 0.15")
     ap.add_argument("--rescan", type=float, default=0.50, help="窗口全量枚举间隔(秒)，默认 0.50")
     ap.add_argument("--exclude", default="", help="额外排除的窗口类名，逗号分隔")
+    ap.add_argument("--skip-fullscreen", action="store_true",
+                    help="完全不管全屏窗口（默认接管并锁定 100%%；"
+                         "玩游戏怕掉帧时用这个退回 v1.3 行为）")
     ap.add_argument("--no-skip-fullscreen", action="store_true",
-                    help="不排除全屏窗口（默认排除，避免游戏/视频被透明化）")
+                    help="已废弃（v1.4.0 起默认就接管全屏窗口，此选项无作用）")
     ap.add_argument("--skip-foreign-layered", action="store_true",
                     help="跳过已自带 WS_EX_LAYERED 的窗口（Chromium/Electron 系，最保守）")
     ap.add_argument("--no-restore", action="store_true", help="退出时不还原透明度")
@@ -1925,26 +2964,38 @@ def main() -> int:
     saved = {} if args.no_config else load_cfg_file()
     inactive, active = GlassConfig.apply_saved(saved, args.inactive_alpha,
                                                args.active_alpha)
+    fade = GlassConfig.apply_saved_fade(saved, args.fade_ms)
+    hover, hover_ratio = GlassConfig.apply_saved_hover(
+        saved, False if args.no_hover else None, args.hover_ratio)
+    # 全屏锁定：--skip-fullscreen（关）> 配置文件 > 内置默认（开）
+    fs_lock = GlassConfig.apply_saved_fs(
+        saved, False if args.skip_fullscreen else None)
     cfg = GlassConfig(
         inactive_alpha=inactive,
         active_alpha=active,
         cfg_path="" if args.no_config else None,
-        fade_ms=args.fade_ms,
+        fade_ms=fade,
         fps=args.fps,
         scan_interval=args.scan,
         rescan_interval=args.rescan,
-        skip_fullscreen=not args.no_skip_fullscreen,
+        fullscreen_lock=fs_lock,
         skip_foreign_layered=args.skip_foreign_layered,
         extra_exclude=[c.strip() for c in args.exclude.split(",") if c.strip()],
         verbose=args.verbose,
         restore_on_exit=not args.no_restore,
         tray=not args.no_tray,
         log_path=args.log,
+        hover=hover,
+        hover_ratio=hover_ratio,
+        hover_interval=args.hover_interval,
     )
     if args.save_config and not args.no_config:
         if cfg.save():
-            print("[win_glass] 已写入配置 %s：非聚焦=%d%%  聚焦=%d%%"
-                  % (CFG_PATH, cfg.inactive_pct, cfg.active_pct))
+            print("[win_glass] 已写入配置 %s：非聚焦=%d%%  聚焦/最大化/置顶=%d%%"
+                  "  全屏=%s  渐隐=%dms  悬停=%s/%d%%"
+                  % (CFG_PATH, cfg.inactive_pct, cfg.active_pct,
+                     "固定100%" if cfg.fullscreen_lock else "不接管",
+                     cfg.fade_ms, "开" if cfg.hover else "关", cfg.hover_pct))
         else:
             print("[win_glass] 配置写入失败，本次改动仅内存生效。")
 

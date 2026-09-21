@@ -23,13 +23,17 @@ ICON = os.path.join(HERE, "icon.ico")
 DIST = os.path.join(HERE, "dist")
 BUILD = os.path.join(HERE, "build")
 SPEC = os.path.join(BUILD, "spec")
-VER = "1.1.0"
+VER = "1.5.0"
 SETUP_NAME = "win_glass_setup_v%s" % VER
+
+# 版本号只在这里写一次 —— 以前 VERSION_FILE 里又手抄了两份（filevers / FileVersion /
+# ProductVersion），改版本时漏改一处，exe 属性里就是旧版本，很难发现。
+_VER_TUPLE = tuple(int(x) for x in VER.split(".")) + (0,) * (4 - len(VER.split(".")))
 
 VERSION_FILE = """VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 1, 0, 0),
-    prodvers=(1, 1, 0, 0),
+    filevers=%(tup)s,
+    prodvers=%(tup)s,
     mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)
   ),
   kids=[
@@ -37,17 +41,17 @@ VERSION_FILE = """VSVersionInfo(
       StringTable('080404B0', [
         StringStruct('CompanyName', 'Yachiyo'),
         StringStruct('FileDescription', 'win_glass - window focus transparency'),
-        StringStruct('FileVersion', '1.0.1.0'),
+        StringStruct('FileVersion', '%(quad)s'),
         StringStruct('InternalName', 'win_glass'),
         StringStruct('OriginalFilename', 'win_glass.exe'),
         StringStruct('ProductName', 'win_glass'),
-        StringStruct('ProductVersion', '1.1.0.0'),
+        StringStruct('ProductVersion', '%(quad)s'),
       ])
     ]),
     VarFileInfo([VarStruct('Translation', [2052, 1200])])
   ]
 )
-"""
+""" % {"tup": _VER_TUPLE, "quad": ".".join(str(n) for n in _VER_TUPLE)}
 
 
 def run(cmd, title):

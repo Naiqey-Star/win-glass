@@ -211,7 +211,7 @@ print("=" * 70)
 print("B. 零窗口场景（动态排除当前所有窗口类）")
 print("=" * 70)
 _excl = ",".join(all_visible_classes())
-r = subprocess.run([PY, MAIN, "--no-tray", "--duration", "4", "--exclude", _excl],
+r = subprocess.run([PY, MAIN, "--no-tray", "--no-config", "--duration", "4", "--exclude", _excl],
                    capture_output=True, text=True, encoding="utf-8",
                    errors="replace", timeout=60)
 out = r.stdout or ""
@@ -224,7 +224,7 @@ print()
 print("=" * 70)
 print("C. 长跑稳定性（30s，反复创建/销毁窗口 + 每 1.5s 置顶抖动以驱动动画）")
 print("=" * 70)
-eng = subprocess.Popen([PY, MAIN, "--no-tray", "--duration", "30", "--exclude",
+eng = subprocess.Popen([PY, MAIN, "--no-tray", "--no-config", "--duration", "30", "--exclude",
                         "Chrome_WidgetWin_1"],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                        text=True, encoding="utf-8", errors="replace")

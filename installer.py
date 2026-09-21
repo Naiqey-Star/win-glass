@@ -45,8 +45,8 @@ for _s in (sys.stdout, sys.stderr):
         pass
 
 APP_NAME = "win_glass"
-APP_VER = "1.1.0"
-APP_DESC = "窗口聚焦透明度美化工具（聚焦/置顶 100%，未聚焦 40%，500ms 平滑过渡）"
+APP_VER = "1.5.0"
+APP_DESC = "窗口聚焦透明度美化工具（聚焦/最大化/置顶走最高值，全屏固定 100%，悬停系数可调 0~1）"
 PUBLISHER = "月见八千代 (Yachiyo)"
 CLIENT_EXE = "win_glass.exe"                 # 窗口化主程序（无控制台，带系统托盘）
 CONSOLE_EXE = "win_glass-console.exe"        # 控制台诊断版（--list / --verbose 等）

@@ -12,7 +12,9 @@ AttachThreadInput + AllowSetForegroundWindow + Alt 敲击 主动切换前台窗�
   3) 编排器把 A 再设回前台            -> A 应变 40% -> 100%，B 变 40%
   4) 引擎退出                        -> A 的 WS_EX_LAYERED 应被移除
 
-为保护你正在使用的窗口，引擎带 --exclude Chrome_WidgetWin_1。
+为保护本机正在使用的窗口，引擎带 --exclude Chrome_WidgetWin_1；
+并且带 --no-config + 显式 --inactive-alpha/--active-alpha：
+既能保证期望值确定（不受用户自己拖过的配置文件影响），也不会写坏真实配置。
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -23,10 +25,12 @@ import sys
 import time
 from ctypes import c_ssize_t
 
-# 一律用「正在跑本脚本的解释器」和「本脚本所在目录」，
-# 这样在任何机器上 clone 下来都能直接跑，无需改路径。
+# 一律用「正在跑本脚本的解释器」和「本脚本所在目录」，任何机器 clone 下来直接可跑。
 PY = sys.executable
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# 本测试使用的两个目标透明度（显式传给引擎，不依赖配置文件）
+INACT_PCT, ACT_PCT = 40, 100
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -129,6 +133,8 @@ say("A 就绪 HWND=0x%08X exstyle=0x%08X  设前台成功=%s  当前前台=0x%08
 # 2) 引擎
 eng = subprocess.Popen(
     [PY, HERE + r"\win_glass.py", "--no-tray", "--duration", "20", "--verbose",
+     "--no-config",
+     "--inactive-alpha", str(INACT_PCT), "--active-alpha", str(ACT_PCT),
      "--exclude", "Chrome_WidgetWin_1"],
     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     encoding="utf-8", errors="replace")
@@ -176,13 +182,16 @@ if ha2:
 
 say("\n--- 关键断言 ---")
 joined = "\n".join(log) + (out or "")
-n40 = len(re.findall(r"100% -> 40%", joined))
-n100 = len(re.findall(r"40% -> 100%", joined))
+# 期望值来自上面显式传给引擎的那两个数，不写死 —— 否则用户一拖滑块就假失败
+n40 = len(re.findall(r"%d%% -> %d%%" % (ACT_PCT, INACT_PCT), joined))
+n100 = len(re.findall(r"%d%% -> %d%%" % (INACT_PCT, ACT_PCT), joined))
 fg_ok = ok_fg and ok_b and ok_a2
 restored = bool(ha2) and not (ex2 & 0x80000)
 say("前台切换确实生效        = %-3s %s" % (fg_ok, "PASS" if fg_ok else "FAIL"))
-say("失焦 100%%->40%% 记录数  = %-3d %s" % (n40, "PASS" if n40 else "FAIL"))
-say("回焦 40%%->100%% 记录数  = %-3d %s" % (n100, "PASS" if n100 else "FAIL"))
+say("失焦 %d%%->%d%% 记录数  = %-3d %s"
+    % (ACT_PCT, INACT_PCT, n40, "PASS" if n40 else "FAIL"))
+say("回焦 %d%%->%d%% 记录数  = %-3d %s"
+    % (INACT_PCT, ACT_PCT, n100, "PASS" if n100 else "FAIL"))
 say("退出后 LAYERED 已移除    = %-3s %s" % (restored, "PASS" if restored else "FAIL"))
 for p in (pa, pb):
     try:
