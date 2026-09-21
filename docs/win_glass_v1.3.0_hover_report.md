@@ -247,4 +247,4 @@ $ win_glass.py --list --no-config --hover-ratio 1.0
 
 ---
 
-*作者：月见八千代 for 彩叶*
+*作者：Naiqey.千鵺 <1609458331@qq.com>*

@@ -1,7 +1,7 @@
 # win_glass v1.0.1 修复报告
 
 > 针对上一版安装后「不可用」的两个问题的修复说明
-> 平台：Windows x64 ｜ 构建：PyInstaller 6.19.0 ｜ 作者：月见八千代 (Yachiyo)
+> 平台：Windows x64 ｜ 构建：PyInstaller 6.19.0 ｜ 作者：Naiqey.千鵺 <1609458331@qq.com>
 
 ---
 

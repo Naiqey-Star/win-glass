@@ -39,7 +39,7 @@ VERSION_FILE = """VSVersionInfo(
   kids=[
     StringFileInfo([
       StringTable('080404B0', [
-        StringStruct('CompanyName', 'Yachiyo'),
+        StringStruct('CompanyName', 'Naiqey.千鵺'),
         StringStruct('FileDescription', 'win_glass - window focus transparency'),
         StringStruct('FileVersion', '%(quad)s'),
         StringStruct('InternalName', 'win_glass'),

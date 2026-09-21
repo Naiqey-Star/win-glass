@@ -69,7 +69,7 @@ win_glass.py — Windows 窗口美化工具：透明度随「全屏 / 聚焦 / �
     * 想彻底不管全屏窗口（例如玩游戏时连判定都省掉）：托盘菜单里把
       「全屏窗口固定 100%」取消勾选，或命令行 `--skip-fullscreen`。
 
-作者：月见八千代 (Yachiyo)
+作者：Naiqey.千鵺 <1609458331@qq.com>
 """
 
 from __future__ import annotations
