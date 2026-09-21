@@ -22,6 +22,7 @@ from ctypes import byref, c_ssize_t
 PY = sys.executable
 HERE = os.path.dirname(os.path.abspath(__file__))
 MAIN = os.path.join(HERE, "win_glass.py")
+MAIN = HERE + r"\win_glass.py"
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -145,6 +146,43 @@ def mem_cpu(pid):
         cpu = (f2i(kt) + f2i(ut)) / 1e7
     kernel32.CloseHandle(h)
     return rss, cpu
+
+
+def find_other_instance():
+    """找有没有别的 win_glass 正在跑（托盘窗口类名 WinGlassTrayWnd_*）。
+
+    必须查：另一个实例会持续接管窗口、把 WS_EX_LAYERED 重新挂回去，
+    于是本脚本「退出后已还原」这类断言会莫名其妙地失败，很难看出真正原因。
+    """
+    me = os.getpid()
+    hit = []
+
+    @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+    def cb(h, l):
+        buf = ctypes.create_unicode_buffer(128)
+        user32.GetClassNameW(h, buf, 128)
+        if buf.value.startswith("WinGlassTrayWnd_"):
+            pid = wt.DWORD()
+            user32.GetWindowThreadProcessId(h, byref(pid))
+            if pid.value and pid.value != me:
+                hit.append((hex(h), buf.value, pid.value))
+        return True
+
+    user32.EnumWindows(cb, 0)
+    return hit
+
+
+_others = find_other_instance()
+if _others:
+    print("=" * 70)
+    print("!! 检测到另有 win_glass 实例正在运行，本脚本结果不可信 !!")
+    for h, cls, pid in _others:
+        print("   窗口 %s  类名 %s  进程 PID %d" % (h, cls, pid))
+    print("   它会不断把 WS_EX_LAYERED 重新挂到窗口上，导致「退出后已还原」等断言")
+    print("   假性失败。请先结束该实例（托盘右键退出，或 taskkill /IM win_glass.exe）")
+    print("   再重新运行本脚本。")
+    print("=" * 70)
+    print()
 
 
 print("=" * 70)

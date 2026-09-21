@@ -23,13 +23,13 @@ ICON = os.path.join(HERE, "icon.ico")
 DIST = os.path.join(HERE, "dist")
 BUILD = os.path.join(HERE, "build")
 SPEC = os.path.join(BUILD, "spec")
-VER = "1.0.1"
+VER = "1.1.0"
 SETUP_NAME = "win_glass_setup_v%s" % VER
 
 VERSION_FILE = """VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 0, 1, 0),
-    prodvers=(1, 0, 1, 0),
+    filevers=(1, 1, 0, 0),
+    prodvers=(1, 1, 0, 0),
     mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)
   ),
   kids=[
@@ -41,7 +41,7 @@ VERSION_FILE = """VSVersionInfo(
         StringStruct('InternalName', 'win_glass'),
         StringStruct('OriginalFilename', 'win_glass.exe'),
         StringStruct('ProductName', 'win_glass'),
-        StringStruct('ProductVersion', '1.0.1.0'),
+        StringStruct('ProductVersion', '1.1.0.0'),
       ])
     ]),
     VarFileInfo([VarStruct('Translation', [2052, 1200])])

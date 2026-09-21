@@ -8,7 +8,9 @@ v2 变更：启动器 .vbs 已彻底移除（部分机器 .vbs 关联被改成�
 主程序无控制台、靠系统托盘交互。
 """
 import ctypes
+import glob
 import os
+import re
 import subprocess
 import sys
 import time
@@ -16,7 +18,24 @@ import winreg
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DIST = os.path.join(HERE, "dist")
-SETUP = os.path.join(DIST, "win_glass_setup_v1.0.1.exe")
+
+
+def _latest_setup():
+    """自动挑 dist 里版本号最高的那个安装包。
+
+    以前这里写死了 win_glass_setup_v1.0.1.exe，每次发版都得回来改一次，
+    忘了改就会测到上一个版本的包（还看不出来）。现在按文件名里的版本号排序。
+    """
+    cands = glob.glob(os.path.join(DIST, "win_glass_setup_v*.exe"))
+
+    def key(p):
+        m = re.search(r"v(\d+)\.(\d+)\.(\d+)", os.path.basename(p))
+        return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
+
+    return max(cands, key=key) if cands else ""
+
+
+SETUP = _latest_setup()
 CLIENT = os.path.join(DIST, "win_glass.exe")            # 窗口化 + 托盘
 CONSOLE = os.path.join(DIST, "win_glass-console.exe")   # 控制台诊断版
 SANDBOX = os.path.join(HERE, "_installtest")
