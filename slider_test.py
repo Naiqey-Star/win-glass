@@ -801,45 +801,35 @@ def test_menu_content():
     check("还原后系数回到 0.8、悬停值 88%",
           abs(eng.cfg.hover_ratio - 0.8) < 1e-9 and eng.cfg.hover_pct == 88,
           "%.1f / %d%%" % (eng.cfg.hover_ratio, eng.cfg.hover_pct))
-    joined = " | ".join(items)
-    check("菜单里有「渐隐时间」项", "渐隐时间" in joined)
-    fade_item = [s for s in items if "渐隐时间" in s]
+    # v1.7.0：开关项（渐隐/日志/退出/悬停/全屏…）改成 owner-draw 两行，
+    # 文字不再能从 GetMenuStringW 读到（文字由我们自己画），勾选态也是自己画的，
+    # 所以这里改从结构化数据 tray._items 核对标签、勾选态、以及值是否随设置实时变。
+    toggles = {it.cid: it for it in tray._items}
+    check("菜单里有「渐隐时间」项", wg.CMD_FADE_MS in toggles)
     check("渐隐时间显示当前值 1234 ms",
-          fade_item and "1234" in fade_item[0], str(fade_item))
-    check("菜单里有「打开日志」", "打开日志" in joined)
-    check("菜单里有退出项", any("退出" in s for s in items))
-    check("菜单里有「悬停半透明」开关项", "悬停半透明" in joined)
-    hover_item = [s for s in items if "悬停半透明" in s]
+          "1234" in toggles[wg.CMD_FADE_MS].label, toggles[wg.CMD_FADE_MS].label)
+    check("菜单里有「打开日志」", wg.CMD_LOG in toggles)
+    check("菜单里有退出项", wg.CMD_QUIT in toggles)
+    check("菜单里有「悬停半透明」开关项", wg.CMD_HOVER in toggles)
     check("悬停项显示当前悬停值 88%（最高100/最低40，系数默认 0.8）",
-          hover_item and "88%" in hover_item[0], str(hover_item))
-    check("悬停项默认是勾选状态",
-          wg.CMD_HOVER in [int(u.GetMenuItemID(m, i)) for i in range(n)]
-          and bool(u.GetMenuState(m, wg.CMD_HOVER, 0x00000000) & 0x0008),
-          "state=0x%04X" % int(u.GetMenuState(m, wg.CMD_HOVER, 0)))
-    check("菜单里有「全屏窗口固定 100%」开关项", "全屏窗口固定 100%" in joined)
+          "88%" in toggles[wg.CMD_HOVER].label, toggles[wg.CMD_HOVER].label)
+    check("悬停项默认是勾选状态", bool(toggles[wg.CMD_HOVER].checked),
+          "checked=%s" % toggles[wg.CMD_HOVER].checked)
+    check("菜单里有「全屏窗口固定 100%」开关项", wg.CMD_FULLSCREEN in toggles)
     check("全屏项默认勾选（= 接管并锁 100%）",
-          wg.CMD_FULLSCREEN in [int(u.GetMenuItemID(m, i)) for i in range(n)]
-          and bool(u.GetMenuState(m, wg.CMD_FULLSCREEN, 0x00000000) & 0x0008),
-          "state=0x%04X" % int(u.GetMenuState(m, wg.CMD_FULLSCREEN, 0)))
+          bool(toggles[wg.CMD_FULLSCREEN].checked))
     # 关掉之后菜单文字要说明"当前完全不接管"
     eng.set_fullscreen_lock(False)
     m3 = tray._build_menu()
-    buf_fs = ctypes.create_unicode_buffer(256)
-    got_fs = []
-    for i in range(u.GetMenuItemCount(m3)):
-        u.GetMenuStringW(m3, i, buf_fs, 256, MSF_BY)
-        if "全屏窗口固定 100%" in buf_fs.value:
-            got_fs.append(buf_fs.value)
+    t3 = {it.cid: it for it in tray._items}
     check("关掉全屏锁定后菜单文字提示「完全不接管」",
-          got_fs and "完全不接管" in got_fs[0], str(got_fs))
-    check("  且该项不再处于勾选态",
-          not (u.GetMenuState(m3, wg.CMD_FULLSCREEN, 0x00000000) & 0x0008),
-          "state=0x%04X" % int(u.GetMenuState(m3, wg.CMD_FULLSCREEN, 0)))
+          "完全不接管" in t3[wg.CMD_FULLSCREEN].label, t3[wg.CMD_FULLSCREEN].label)
+    check("  且该项不再处于勾选态", not t3[wg.CMD_FULLSCREEN].checked)
     u.DestroyMenu(m3)
     eng.set_fullscreen_lock(True)
 
     # ID 必须是菜单命令 ID，而不是随便的数字
-    ids = [int(u.GetMenuItemID(m, i)) for i in range(n)]
+    ids = [it.cid for it in tray._items] + [s.cid for s in tray._sliders]
     check("渐隐时间项的 ID == CMD_FADE_MS",
           wg.CMD_FADE_MS in ids, str(ids))
     check("三个滑块的 ID 都在菜单里",
@@ -848,13 +838,9 @@ def test_menu_content():
     # 改一下时长，菜单文字必须跟着变
     eng.set_fade_ms(250)
     m2 = tray._build_menu()
-    buf = ctypes.create_unicode_buffer(256)
-    got = []
-    for i in range(u.GetMenuItemCount(m2)):
-        u.GetMenuStringW(m2, i, buf, 256, MSF_BY)
-        if "渐隐时间" in buf.value:
-            got.append(buf.value.replace("\t", "  "))
-    check("改了时长后菜单显示 250 ms", got and "250" in got[0], str(got))
+    t2 = {it.cid: it for it in tray._items}
+    check("改了时长后菜单显示 250 ms",
+          "250" in t2[wg.CMD_FADE_MS].label, t2[wg.CMD_FADE_MS].label)
     u.DestroyMenu(m2)
     u.DestroyMenu(m)
 

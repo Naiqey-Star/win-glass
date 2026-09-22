@@ -84,6 +84,14 @@ import threading
 import time
 from ctypes import byref, c_ssize_t, c_ubyte
 
+try:
+    # 多语言文案与快捷键的「纯逻辑」层，见 win_glass_i18n.py 的说明。
+    # 单独成模块是为了能脱离 GUI 单测（它不碰 ctypes、不碰窗口）。
+    import win_glass_i18n as i18n
+except ImportError:                                   # pragma: no cover
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import win_glass_i18n as i18n
+
 # --------------------------------------------------------------------------
 # 输出环境：既要中文不乱码，也要兼容「窗口化(--noconsole)打包」时没有控制台的情况
 # --------------------------------------------------------------------------
@@ -91,7 +99,7 @@ DEFAULT_LOG = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser(
                            "win_glass", "win_glass.log")
 DEFAULT_CFG = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"),
                            "win_glass", "config.json")
-APP_VER = "1.6.0"
+APP_VER = "1.7.0"
 LOG_PATH = DEFAULT_LOG
 CFG_PATH = DEFAULT_CFG
 _IO_LOG_FH = None          # 当前接管的日志文件句柄（用于 --log 覆盖时重开）
@@ -383,6 +391,7 @@ WM_DRAWITEM, WM_MEASUREITEM = 0x002B, 0x002C
 # 因为宽高被写进了 DRAWITEMSTRUCT 的 itemAction/itemState，而绘制时读到的
 # rcItem 其实是 MEASUREITEMSTRUCT 里的垃圾值。定位过程见 probe_map.py。
 WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0200, 0x0201, 0x0202
+WM_RBUTTONDOWN, WM_RBUTTONUP = 0x0204, 0x0205
 WM_MOUSEWHEEL = 0x020A
 WM_KEYDOWN = 0x0100
 VK_LEFT, VK_RIGHT = 0x25, 0x27
@@ -409,6 +418,52 @@ PROBE_MAX = 64                  # 诊断明细最多留这么多条，常驻进�
 MENU_CLASS = "#32768"
 # RedrawWindow 标志：立刻失效并同步重画（不等消息队列里的 WM_PAINT）
 RDW_INVALIDATE, RDW_UPDATENOW, RDW_ERASE = 0x0001, 0x0100, 0x0004
+
+# ---------------------------------------------------------------------------
+# 全局快捷键（v1.7.0）
+# ---------------------------------------------------------------------------
+# 菜单项上绑的快捷键靠 RegisterHotKey 走全局热键：托盘那个隐藏窗口本身就有
+# 消息循环，WM_HOTKEY 直接落到它的窗口过程里，不需要额外的线程或钩子。
+WM_HOTKEY = 0x0312
+MOD_NOREPEAT = 0x4000            # 按住不放不重复触发（否则按住会刷屏）
+VK_BACK, VK_DELETE, VK_ESCAPE = 0x08, 0x2E, 0x1B
+VK_SHIFT, VK_CONTROL, VK_MENU = 0x10, 0x11, 0x12
+VK_LWIN, VK_RWIN = 0x5B, 0x5C
+VK_SPACE = 0x20
+
+# 低级别键盘钩子：录制快捷键时用它把按键**整个吞掉**，否则菜单会把这些键
+# 当成助记符/方向键自己处理掉，根本录不到。WH_KEYBOARD_LL 不需要注入 DLL。
+WH_KEYBOARD_LL = 13
+LLKHF_UP = 0x80                  # KBDLLHOOKSTRUCT.flags 的「松开」位
+
+
+# ---------------------------------------------------------------------------
+# 菜单圆角（v1.7.0）：对齐 Windows 11 的视觉风格
+# ---------------------------------------------------------------------------
+# DWMWA_WINDOW_CORNER_PREFERENCE 在 Win11(22000+) 上能把任意顶层窗口（包括菜单
+# 窗口 #32768）的四角设成圆角；Win10 及更早会直接失败，失败就退回方角，无害。
+DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMWCP_DEFAULT, DWMWCP_DONOTROUND, DWMWCP_ROUND, DWMWCP_ROUNDSMALL = 0, 1, 2, 3
+
+try:                                   # 非 Windows 上跑测试时 sys 里没有这项
+    _WIN_BUILD = sys.getwindowsversion()[2]
+except Exception:                      # pragma: no cover
+    _WIN_BUILD = 0
+IS_WIN11 = _WIN_BUILD >= 22000         # Win11 首版内部版本是 22000
+
+# owner-draw 菜单项的圆角：Win11 用 6px，Win10 保持 0（直角）以免显得格格不入
+MENU_CORNER_R = 6 if IS_WIN11 else 0
+# 选中态高亮块相对菜单项内缩一点，圆角才看得出是「一块」而不是半屏色块
+MENU_HILITE_INSET = 2
+
+# 两行的普通菜单项（标题 + 灰色快捷键提示）比滑块矮一些
+TOGGLE_ITEM_H = 40
+TOGGLE_HINT_H = 15                # 第二行（灰色小字）的高度
+TOGGLE_PAD_X = 15                 # 和滑块的 SLIDER_PAD_X 对齐，视觉才不歪
+
+# 语言子菜单的命令 ID：从 100 起，一段连续区间，避免和上面的 CMD_* 撞车
+CMD_LANG_BASE = 100
+CMD_LANG_MENU = 90                # 「语言…」这一项本身（它带子菜单）
 
 # 重绘链路诊断：设 WIN_GLASS_DEBUG_REDRAW=1 后，每次 _redraw_item 都会打印
 # 目标窗口、窗口类名、各 API 返回值与 WM_DRAWITEM 计数。排查「拖了不刷新」用这个。
@@ -496,6 +551,38 @@ user32.GetTopWindow.argtypes = [wt.HWND]
 user32.GetTopWindow.restype = wt.HWND
 user32.GetWindow.argtypes = [wt.HWND, wt.UINT]
 user32.GetWindow.restype = wt.HWND
+
+# ---- 全局热键（v1.7.0）----
+user32.RegisterHotKey.argtypes = [wt.HWND, ctypes.c_int, wt.UINT, wt.UINT]
+user32.RegisterHotKey.restype = wt.BOOL
+user32.UnregisterHotKey.argtypes = [wt.HWND, ctypes.c_int]
+user32.UnregisterHotKey.restype = wt.BOOL
+# 录制快捷键时用它读「当前按住的修饰键」——比在 LL 钩子里自己记账更可靠：
+# 用户可能在我们开始录制**之前**就按住了 Ctrl，那种情况记账会漏。
+user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+user32.GetAsyncKeyState.restype = ctypes.c_short
+kernel32.GetUserDefaultUILanguage.restype = wt.LANGID
+kernel32.GetUserDefaultUILanguage.argtypes = []
+
+# ---- 低级别键盘钩子（录制快捷键用）----
+user32.SetWindowsHookExW.restype = wt.HHOOK
+
+# ---- DWM 圆角（Win11）----
+if dwmapi is not None:
+    dwmapi.DwmSetWindowAttribute.argtypes = [wt.HWND, wt.DWORD,
+                                             ctypes.c_void_p, wt.DWORD]
+    dwmapi.DwmSetWindowAttribute.restype = ctypes.c_long
+
+
+class KBDLLHOOKSTRUCT(ctypes.Structure):
+    """WH_KEYBOARD_LL 回调拿到的键盘事件。
+
+    ⚠️ 字段顺序不能改：这是系统填充的二进制结构，改了就会把 scanCode
+    当成 vkCode 之类的错位（症状：录到的键永远不对）。
+    """
+    _fields_ = [("vkCode", wt.DWORD), ("scanCode", wt.DWORD),
+                ("flags", wt.DWORD), ("time", wt.DWORD),
+                ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
 
 
 def _win_class(hwnd) -> str:
@@ -827,6 +914,41 @@ def save_cfg_file(d: dict, path=None) -> bool:
         return False
 
 
+def _detect_sys_lang() -> str:
+    """读系统 UI 语言，映射成我们的语言 code；拿不到就回退英文。"""
+    try:
+        langid = int(kernel32.GetUserDefaultUILanguage())
+    except Exception:
+        return i18n.FALLBACK_LANG
+    return i18n.detect_sys_lang(langid)
+
+
+def _sanitize_shortcuts(raw) -> dict:
+    """把配置里读到的 shortcuts 洗成干净的 {int cid: "Ctrl+Alt+P"}。
+
+    为什么要洗：这个文件用户可能会手改，也可能被旧版本写成别的形状。
+    任何一条不合法就**整条丢弃**（而不是抛异常）——少一个快捷键只是没绑上，
+    抛异常会让整个程序起不来，代价完全不对等。
+    """
+    out = {}
+    if not isinstance(raw, dict):
+        return out
+    for k, v in raw.items():
+        try:
+            cid = int(k)
+        except Exception:
+            continue
+        parsed = i18n.parse_combo(v) if isinstance(v, str) else None
+        if parsed is None:
+            continue
+        mods, vk = parsed
+        norm = i18n.normalize_combo(mods, vk)
+        if norm is None:
+            continue
+        out[cid] = i18n.format_combo(*norm)
+    return out
+
+
 class GlassConfig:
     """运行配置。
 
@@ -855,6 +977,12 @@ class GlassConfig:
     DEFAULT_LAYER_DECAY = DEFAULT_LAYER_DECAY          # 见模块顶部常量
     # 层衰减系数滑块的档位数（1 档 = 0.1 ⇒ 1~10 即 0.1~1.0）
     LAYER_DECAY_UNITS = LAYER_DECAY_UNITS              # 见模块顶部常量
+    # 语言（v1.7.0）："auto" = 跟随系统 UI 语言，具体语言写 zh_CN / en_US …
+    DEFAULT_LANG = i18n.DEFAULT_LANG
+    # 可以给「菜单项命令」绑全局快捷键的那些命令 ID。
+    # 滑块不给绑：它本身是靠鼠标拖的，绑热键没有意义，还会让人误会。
+    BINDABLE_CMDS = (CMD_TOGGLE, CMD_RESTORE, CMD_HOVER, CMD_FULLSCREEN,
+                     CMD_LAYER, CMD_FADE_MS, CMD_LOG, CMD_QUIT)
 
     def __init__(self, inactive_alpha=0.40, active_alpha=1.00, fade_ms=500, fps=60,
                  scan_interval=0.15, rescan_interval=0.50,
@@ -862,7 +990,8 @@ class GlassConfig:
                  extra_exclude=(), verbose=False, restore_on_exit=True,
                  tray=True, log_path="", cfg_path=None,
                  hover=None, hover_ratio=None, hover_interval=None,
-                 layer_decay=None, layer_decay_ratio=None):
+                 layer_decay=None, layer_decay_ratio=None,
+                 language=None, shortcuts=None):
         # cfg_path=None → 用默认路径；cfg_path="" → 明确关闭持久化
         self.cfg_path = CFG_PATH if cfg_path is None else cfg_path
         # None 视为「没指定」，落到内置默认；否则 _to_pct(None) 会直接 TypeError
@@ -899,6 +1028,71 @@ class GlassConfig:
         self.layer_decay_ratio = (self.DEFAULT_LAYER_DECAY
                                   if layer_decay_ratio is None
                                   else layer_decay_ratio)
+        # ---- 语言与快捷键（v1.7.0）----
+        # 语言单独一个 I18N 实例持有：改语言只需要换实例，不用到处传参数。
+        self._sys_lang = _detect_sys_lang()
+        self.i18n = i18n.I18N(language or self.DEFAULT_LANG, self._sys_lang)
+        # 快捷键：{命令ID(int): "Ctrl+Alt+P"}。键是 int，落盘时才转成 str。
+        self.shortcuts = _sanitize_shortcuts(shortcuts)
+        # 语言一旦切换，菜单上的按钮文案（确定/取消）也要跟着走，
+        # 所以这里把常用按钮文案暴露成属性，供对话框取用。
+
+    # ---- 语言（v1.7.0）----
+    @property
+    def language(self) -> str:
+        """配置里存的那个值（可能是 "auto"）。"""
+        return self.i18n.requested
+
+    @language.setter
+    def language(self, code: str):
+        self.i18n.set(str(code) if code else self.DEFAULT_LANG)
+
+    @property
+    def lang_effective(self) -> str:
+        """实际生效的语言（"auto" 已解析成具体语言）。"""
+        return self.i18n.effective
+
+    def t(self, key: str, **kw) -> str:
+        """取当前语言的文案——菜单/对话框一律走这里，不要直接写字面量。"""
+        return self.i18n.t(key, **kw)
+
+    # ---- 快捷键（v1.7.0）----
+    def shortcut_of(self, cid: int) -> str:
+        """该命令当前绑定的快捷键文本；没绑就返回空串。"""
+        return self.shortcuts.get(int(cid), "")
+
+    def combos_of(self, cid: int):
+        """(mods, vk) 或 None。解析失败（坏数据/被手改过）当作没绑。"""
+        return i18n.parse_combo(self.shortcut_of(cid))
+
+    def owner_of_combo(self, text: str, exclude_cid: int = None):
+        """这个组合已经被谁占了？返回命令 ID 或 None（冲突检测用）。"""
+        for cid, s in self.shortcuts.items():
+            if int(cid) == int(exclude_cid or -1):
+                continue
+            if s and s.lower() == str(text).lower():
+                return int(cid)
+        return None
+
+    def set_shortcut(self, cid: int, text: str) -> bool:
+        """绑定/解绑一个快捷键。text 为空串即解绑。返回是否有变化。"""
+        cid = int(cid)
+        text = "" if text is None else str(text)
+        if text:
+            parsed = i18n.parse_combo(text)
+            if parsed is None:
+                return False
+            mods, vk = parsed
+            if not i18n.is_bindable_vk(vk):
+                return False
+            text = i18n.format_combo(mods, vk)      # 归一化后再存
+        if self.shortcuts.get(cid, "") == text:
+            return False
+        if text:
+            self.shortcuts[cid] = text
+        else:
+            self.shortcuts.pop(cid, None)
+        return True
 
     # ---- 非聚焦最低透明度（5~95%）----
     @property
@@ -1057,7 +1251,24 @@ class GlassConfig:
                 "hover_ratio": round(float(self._hover_ratio), 3),
                 "fullscreen_lock": bool(self._fullscreen_lock),
                 "layer_decay": bool(self._layer_decay),
-                "layer_decay_ratio": round(float(self._layer_decay_ratio), 3)}
+                "layer_decay_ratio": round(float(self._layer_decay_ratio), 3),
+                # v1.7.0：语言与快捷键。shortcuts 的键必须是 str（JSON 要求）
+                "language": self.language,
+                "shortcuts": {str(k): v for k, v in sorted(self.shortcuts.items())}}
+
+    @classmethod
+    def apply_saved_lang(cls, saved: dict, language, shortcuts=None):
+        """语言 / 快捷键的「命令行 > 配置文件 > 内置默认」三级优先。
+
+        和 apply_saved 系列一样单独一个方法：不破坏既有调用方的返回值形状。
+        """
+        if language is None:
+            language = (saved or {}).get("language", i18n.DEFAULT_LANG)
+        if not language:
+            language = i18n.DEFAULT_LANG
+        if shortcuts is None:
+            shortcuts = _sanitize_shortcuts((saved or {}).get("shortcuts"))
+        return language, shortcuts
 
     def save(self) -> bool:
         return save_cfg_file(self.as_dict(), self.cfg_path)
@@ -1611,8 +1822,16 @@ def draw_menu_slider(dis, label: str, lo: int, hi: int, pct: int,
     fill_c, track_c, thumb_c, ring_c = _slider_colors(selected, disabled)
 
     # 背景必须自己刷：owner-draw 项不会被系统自动填充
-    user32.FillRect(hdc, byref(rc), user32.GetSysColorBrush(
-        COLOR_HIGHLIGHT if selected else COLOR_MENU))
+    # v1.7.0：Win11 下高亮块改画**圆角**，和新增的两行菜单项观感一致。
+    # Win10（MENU_CORNER_R=0）自动退化成整行填充，零成本、零差异。
+    if selected and MENU_CORNER_R > 0:
+        user32.FillRect(hdc, byref(rc), user32.GetSysColorBrush(COLOR_MENU))
+        fill_round_rect(hdc, rc.left + MENU_HILITE_INSET, rc.top + MENU_HILITE_INSET,
+                        rc.right - MENU_HILITE_INSET, rc.bottom - MENU_HILITE_INSET,
+                        int(user32.GetSysColor(COLOR_HIGHLIGHT)), MENU_CORNER_R)
+    else:
+        user32.FillRect(hdc, byref(rc), user32.GetSysColorBrush(
+            COLOR_HIGHLIGHT if selected else COLOR_MENU))
 
     old_font = gdi32.SelectObject(hdc, _menu_font())
     old_mode = gdi32.SetBkMode(hdc, TRANSPARENT)
@@ -1658,6 +1877,146 @@ def draw_menu_slider(dis, label: str, lo: int, hi: int, pct: int,
     gdi32.SelectObject(hdc, old_font)
     gdi32.SetBkMode(hdc, old_mode)
     gdi32.SetTextColor(hdc, int(user32.GetSysColor(COLOR_MENUTEXT)))
+
+
+# --------------------------------------------------------------------------
+# v1.7.0：Windows 11 圆角菜单
+# --------------------------------------------------------------------------
+def fill_round_rect(hdc, left, top, right, bottom, color, radius=0):
+    """画一个填充矩形；radius>0 时走 RoundRect（Win11 的圆角高亮块）。
+
+    ⚠️ 不能直接改用具名 Adams 的 CreateRoundRectRgn + FillRgn：那样边缘没有
+    GDI 的路径抗锯齿，小块高亮会毛边。RoundRect 走的是当前笔+刷路径，观感
+    和系统菜单一致。Win10（radius=0）自动退化成普通 FillRect，零成本。
+    """
+    if right <= left or bottom <= top:
+        return
+    brush = gdi32.CreateSolidBrush(int(color))
+    if not brush:
+        if radius <= 0:
+            user32.FillRect(hdc, byref(wt.RECT(left, top, right, bottom)),
+                            user32.GetSysColorBrush(COLOR_MENU))
+        return
+    try:
+        if radius <= 0:
+            rc = wt.RECT(left, top, right, bottom)
+            user32.FillRect(hdc, byref(rc), brush)
+            return
+        # RoundRect 用当前笔描边：把笔设成和刷同色且宽度为 1，
+        # 避免描边用默认的黑笔画出一圈脏边。
+        pen = gdi32.CreatePen(0, 1, int(color))       # PS_SOLID
+        old_pen = old_brush = 0
+        if pen:
+            old_pen = gdi32.SelectObject(hdc, pen)
+        old_brush = gdi32.SelectObject(hdc, brush)
+        gdi32.RoundRect(hdc, left, top, right, bottom, radius * 2, radius * 2)
+        if old_brush:
+            gdi32.SelectObject(hdc, old_brush)
+        if pen:
+            if old_pen:
+                gdi32.SelectObject(hdc, old_pen)
+            gdi32.DeleteObject(pen)
+    finally:
+        gdi32.DeleteObject(brush)
+
+
+def set_menu_corner_preference(hwnd: int, enable: bool = True) -> bool:
+    """给菜单窗口套上 Win11 的圆角偏好。
+
+    Windows 11 会把顶层窗口（包括 #32768 菜单窗口）的四角按这个属性渲染成圆角；
+    Win10 及更早版本没有这个属性，调用会失败 —— 失败就保持方角，无害。
+
+    ⚠️ 必须在菜单窗口**已经创建之后**调用（TrackPopupMenu 期间拿到句柄），
+    提前对 0 句柄调用会直接返回失败。
+    """
+    if not hwnd or dwmapi is None or not enable:
+        return False
+    if not IS_WIN11:
+        return False
+    try:
+        val = ctypes.c_int(DWMWCP_ROUND)
+        hr = dwmapi.DwmSetWindowAttribute(
+            wt.HWND(hwnd), DWMWA_WINDOW_CORNER_PREFERENCE,
+            byref(val), ctypes.sizeof(val))
+        return hr == 0
+    except Exception:
+        return False
+
+
+def draw_menu_toggle(dis, label: str, hint: str, checked: bool = False,
+                     hint_alert: bool = False):
+    """把一个 owner-draw 菜单项画成「标题 + 灰色小字」两行。
+
+        暂停（所有窗口恢复 100%）          <- 第一行：正式标题（可带勾选标记）
+        右键设置快捷键                     <- 第二行：灰色小字（快捷键/提示）
+
+    `hint_alert=True` 时第二行用强调色画（冲突/错误提示），让「这条要注意」
+    一眼能看出来，而不是混在普通灰色里被忽略。
+
+    ⚠️ owner-draw 项**必须自己刷背景**：系统不会替我们填，不刷就会留下残影。
+    """
+    hdc = dis.hDC
+    rc = dis.rcItem
+    selected = bool(dis.itemState & ODS_SELECTED)
+    disabled = bool(dis.itemState & (ODS_GRAYED | ODS_DISABLED))
+
+    menu_bg = int(user32.GetSysColor(COLOR_MENU))
+    # 1) 整个项刷菜单底色（清残影）
+    user32.FillRect(hdc, byref(rc), user32.GetSysColorBrush(COLOR_MENU))
+    # 2) 选中态：画一块**圆角**高亮块（Win11 观感的关键）
+    if selected and MENU_CORNER_R > 0:
+        fill_round_rect(hdc, rc.left + MENU_HILITE_INSET,
+                        rc.top + MENU_HILITE_INSET,
+                        rc.right - MENU_HILITE_INSET,
+                        rc.bottom - MENU_HILITE_INSET,
+                        int(user32.GetSysColor(COLOR_HIGHLIGHT)), MENU_CORNER_R)
+    elif selected:
+        inner = wt.RECT(rc.left + MENU_HILITE_INSET, rc.top + MENU_HILITE_INSET,
+                        rc.right - MENU_HILITE_INSET, rc.bottom - MENU_HILITE_INSET)
+        user32.FillRect(hdc, byref(inner), user32.GetSysColorBrush(COLOR_HIGHLIGHT))
+
+    old_mode = gdi32.SetBkMode(hdc, TRANSPARENT)
+    left = rc.left + TOGGLE_PAD_X
+    right = rc.right - TOGGLE_PAD_X
+    # 勾选标记占 14px，标题要给它让位，否则会被压在钩下面
+    mark_w = 14 if checked else 0
+
+    # ---- 第一行：标题 ----
+    title_c = int(user32.GetSysColor(
+        COLOR_GRAYTEXT if disabled else
+        (COLOR_HIGHLIGHTTEXT if selected else COLOR_MENUTEXT)))
+    r1 = wt.RECT(left + mark_w, rc.top + 2, right, rc.top + 2 + TOGGLE_ITEM_H // 2)
+    gdi32.SelectObject(hdc, _menu_font())
+    gdi32.SetTextColor(hdc, title_c)
+    if checked:
+        # 手画一个对钩（两条 LineTo）：MFT_OWNERDRAW 下系统不会替你画勾
+        mark_c = int(user32.GetSysColor(
+            COLOR_HIGHLIGHTTEXT if selected else COLOR_MENUTEXT))
+        gdi32.SetTextColor(hdc, mark_c)
+        mr = wt.RECT(left, rc.top + 2, left + mark_w, rc.top + 2 + TOGGLE_ITEM_H // 2)
+        user32.DrawTextW(hdc, "✓", -1, byref(mr),
+                         DT_LEFT | DT_VCENTER | DT_SINGLELINE)
+        gdi32.SetTextColor(hdc, title_c)
+    user32.DrawTextW(hdc, label, -1, byref(r1),
+                     DT_LEFT | DT_VCENTER | DT_SINGLELINE)
+
+    # ---- 第二行：灰色小字（快捷键 / 提示）----
+    if hint:
+        if disabled:
+            hint_c = int(user32.GetSysColor(COLOR_GRAYTEXT))
+        elif hint_alert:
+            hint_c = _accent_color()
+        elif selected:
+            hint_c = int(user32.GetSysColor(COLOR_HIGHLIGHTTEXT))
+        else:
+            hint_c = _mix(int(user32.GetSysColor(COLOR_MENUTEXT)), menu_bg, 0.42)
+        r2 = wt.RECT(left + mark_w, rc.top + TOGGLE_ITEM_H // 2, right,
+                     rc.bottom - 2)
+        gdi32.SetTextColor(hdc, hint_c)
+        user32.DrawTextW(hdc, hint, -1, byref(r2),
+                         DT_LEFT | DT_VCENTER | DT_SINGLELINE)
+
+    gdi32.SetBkMode(hdc, old_mode)
 
 
 class MenuSlider:
@@ -1875,8 +2234,25 @@ class NumberInputBox:
         return self.result
 
 
+class _ToggleItem:
+    """托盘菜单里一个 owner-draw 的「两行」菜单项（标题 + 灰色快捷键提示）。
+
+    刻意做成只有字段的轻结构：`hmenu` / `pos` 是为了复用 `_item_rect()` 取
+    屏幕矩形（它原本只认滑块，两者都有这两个字段就能共用一套几何逻辑）。
+    """
+
+    __slots__ = ("cid", "label", "checked", "hmenu", "pos")
+
+    def __init__(self, cid, label, checked=False):
+        self.cid = int(cid)
+        self.label = label
+        self.checked = bool(checked)
+        self.hmenu = 0
+        self.pos = 0
+
+
 class TrayIcon:
-    """系统托盘图标。左键单击=暂停/继续；右键菜单=暂停、两个透明度滑块、日志、退出。"""
+    """系统托盘图标。左键单击=暂停/继续；右键菜单=各项开关、滑块、快捷键绑定、语言。"""
 
     def __init__(self, engine, tip="win_glass — 窗口聚焦透明"):
         self.engine = engine
@@ -1886,10 +2262,19 @@ class TrayIcon:
         self._ready = threading.Event()
         # ---- 菜单滑块状态 ----
         self._sliders = []          # 当前菜单里的 MenuSlider 列表
+        self._items = []            # 当前菜单里的 _ToggleItem 列表（v1.7.0）
         self._hook = 0              # WH_MSGFILTER 钩子
         self._hook_ref = None       # 钩子回调引用（不放会被 GC，随即崩溃）
         self._menu_hwnd = 0         # 正在显示的菜单窗口（给坐标换算用）
         self._dragging = False      # 是否正在拖动滑块
+        # ---- 快捷键录制（v1.7.0）----
+        self._recording = 0         # 正在录制的命令 ID（0=没在录）
+        self._rec_pending = None    # 已按下、等松手的那次组合 (mods, vk)
+        self._kb_hook = 0           # WH_KEYBOARD_LL 钩子（只在录制期间挂）
+        self._kb_hook_ref = None    # 同上，必须留引用
+        self._alerts = {}           # {cid: 提示文案} 冲突/失败之类的一次性提示
+        self._hotkeys = {}          # 已成功注册的热键 {cid: True}
+        self._rounded = False       # 菜单窗口是否已成功套上 Win11 圆角
         # 诊断用：菜单相关消息的到达计数（滑块出问题时看这个最快）
         self.msg_counts = {"measure": 0, "draw": 0, "initmenu": 0, "select": 0,
                            "mouse": 0, "key": 0, "wheel": 0}
@@ -1966,6 +2351,8 @@ class TrayIcon:
             if not shell32.Shell_NotifyIconW(NIM_ADD, byref(nid)):
                 self.hwnd = 0
                 return
+            # v1.7.0：窗口一就绪就把配置里存的快捷键注册成全局热键
+            self._register_hotkeys()
         except Exception as e:
             print("[win_glass] 托盘创建异常：%r" % (e,))
             self.hwnd = 0
@@ -1991,6 +2378,11 @@ class TrayIcon:
                     self._popup()
                 return 0
             if msg == WM_COMMAND:
+                self._invoke(int(wparam) & 0xFFFF)
+                return 0
+            if msg == WM_HOTKEY:
+                # v1.7.0 全局快捷键：RegisterHotKey 的 id 就是命令 ID，
+                # wParam 直接拿来用，不需要查表。
                 self._invoke(int(wparam) & 0xFFFF)
                 return 0
             if msg == WM_MEASUREITEM:
@@ -2049,40 +2441,357 @@ class TrayIcon:
         m = user32.CreatePopupMenu()
         if not m:
             return 0
-        paused = self.engine.paused
         cfg = self.engine.cfg
-        user32.AppendMenuW(m, MF_STRING | (MF_CHECKED if paused else 0), CMD_TOGGLE,
-                           "已暂停（点击继续）" if paused else "暂停（所有窗口恢复 100%）")
-        user32.AppendMenuW(m, MF_STRING, CMD_RESTORE, "立即把所有窗口恢复 100%")
-        user32.AppendMenuW(m, MF_STRING | (MF_CHECKED if cfg.hover else 0),
-                           CMD_HOVER,
-                           "悬停半透明（未聚焦窗口 → %d%%）" % cfg.hover_pct)
-        user32.AppendMenuW(m, MF_STRING | (MF_CHECKED if cfg.fullscreen_lock else 0),
-                           CMD_FULLSCREEN,
-                           "全屏窗口固定 100%（不受最高值设置影响）"
-                           if cfg.fullscreen_lock else
-                           "全屏窗口固定 100%（当前：完全不接管全屏）")
-        # 层叠衰减（v1.6.0）：勾选时把前几层的**实际算出来的值**直接写进菜单
-        # 文字 —— 省得用户自己去心算「50% × 0.7 × 0.7 是多少」。
-        if cfg.layer_decay:
-            _layer_text = "层叠衰减（普通非聚焦逐层：%s…）" % " / ".join(
-                "%d%%" % layer_pct(cfg.inactive_pct, d, cfg.layer_decay_ratio)
-                for d in range(1, 4))
-        else:
-            _layer_text = "层叠衰减（当前：关，所有非聚焦统一 %d%%）" % cfg.inactive_pct
-        user32.AppendMenuW(m, MF_STRING | (MF_CHECKED if cfg.layer_decay else 0),
-                           CMD_LAYER, _layer_text)
+        # 每次重新弹菜单都清掉上一轮的告警（「冲突」提示不该跨菜单留着）
+        self._alerts = {}
+        self._items = []
+        # ① 上面一排开关（两行：标题 + 灰色快捷键提示）
+        self._append_toggle(m, CMD_TOGGLE, *self._spec(CMD_TOGGLE))
+        self._append_toggle(m, CMD_RESTORE, *self._spec(CMD_RESTORE))
+        self._append_toggle(m, CMD_HOVER, *self._spec(CMD_HOVER))
+        self._append_toggle(m, CMD_FULLSCREEN, *self._spec(CMD_FULLSCREEN))
+        self._append_toggle(m, CMD_LAYER, *self._spec(CMD_LAYER))
         user32.AppendMenuW(m, MF_SEPARATOR, 0, None)
+        # ② 滑块
         self._append_sliders(m)
         user32.AppendMenuW(m, MF_SEPARATOR, 0, None)
-        # 渐隐时间：普通菜单项。\t 之后那段会被菜单自动右对齐，
-        # 正好和上面滑块右边的「40%」列对齐。
-        user32.AppendMenuW(m, MF_STRING, CMD_FADE_MS,
-                           "渐隐时间…\t%d ms" % self.engine.cfg.fade_ms)
+        # ③ 渐隐时间（也是两行，可绑快捷键）
+        self._append_toggle(m, CMD_FADE_MS,
+                            "%s\t%d ms" % (cfg.t("fade"), cfg.fade_ms), False)
+        # ④ 语言子菜单（普通项 + 打勾，不涉及快捷键）
+        self._append_language_menu(m)
         user32.AppendMenuW(m, MF_SEPARATOR, 0, None)
-        user32.AppendMenuW(m, MF_STRING, CMD_LOG, "打开日志")
-        user32.AppendMenuW(m, MF_STRING, CMD_QUIT, "退出（还原全部窗口）")
+        self._append_toggle(m, CMD_LOG, *self._spec(CMD_LOG))
+        self._append_toggle(m, CMD_QUIT, *self._spec(CMD_QUIT))
         return m
+
+    # ---------------- 菜单项：内容 ----------------
+    def _spec(self, cid):
+        """某个命令 ID 当前的 (标题, 是否勾选)。
+
+        标题依赖实时状态（比如「已暂停」和「暂停」是同一项的两幅面孔），
+        所以每次弹菜单都要重算，不能在启动时算一次存着。
+        """
+        cfg = self.engine.cfg
+        t = cfg.t
+        if cid == CMD_TOGGLE:
+            paused = self.engine.paused
+            return (t("resume") if paused else t("pause"), paused)
+        if cid == CMD_RESTORE:
+            return (t("restore"), False)
+        if cid == CMD_HOVER:
+            return (t("hover", pct=cfg.hover_pct), bool(cfg.hover))
+        if cid == CMD_FULLSCREEN:
+            return ((t("fullscreen_on") if cfg.fullscreen_lock
+                     else t("fullscreen_off")), bool(cfg.fullscreen_lock))
+        if cid == CMD_LAYER:
+            # 勾选时把前几层的**实际算出来的值**直接写进菜单文字 ——
+            # 省得用户自己去心算「50% × 0.7 × 0.7 是多少」。
+            if cfg.layer_decay:
+                txt = t("layer_on", vals=" / ".join(
+                    "%d%%" % layer_pct(cfg.inactive_pct, d, cfg.layer_decay_ratio)
+                    for d in range(1, 4)))
+            else:
+                txt = t("layer_off", pct=cfg.inactive_pct)
+            return (txt, bool(cfg.layer_decay))
+        if cid == CMD_LOG:
+            return (t("log"), False)
+        if cid == CMD_QUIT:
+            return (t("quit"), False)
+        return ("", False)
+
+    def _hint_for(self, cid) -> str:
+        """第二行那行灰色小字该显示什么。"""
+        cfg = self.engine.cfg
+        if self._recording == cid:
+            return cfg.t("shortcut_rec")           # 正在录制：提示按键
+        alert = self._alerts.get(cid)
+        if alert:
+            return alert                            # 冲突 / 注册失败
+        combo = cfg.shortcut_of(cid)
+        if combo:
+            return combo + "    " + cfg.t("shortcut_clear")
+        return cfg.t("shortcut_unset")
+
+    def _is_alert_hint(self, cid) -> bool:
+        """告警文案用强调色画，普通提示用灰色。"""
+        return bool(self._alerts.get(cid)) or self._recording == cid
+
+    def _append_toggle(self, m, cid, label, checked):
+        """把一个命令项作为 owner-draw（两行）插进菜单。"""
+        it = _ToggleItem(cid, label, checked)
+        it.hmenu = m
+        it.pos = max(0, user32.GetMenuItemCount(m))
+        mii = MENUITEMINFOW()
+        mii.cbSize = ctypes.sizeof(MENUITEMINFOW)
+        mii.fMask = MIIM_ID | MIIM_FTYPE | MIIM_DATA
+        mii.fType = MFT_OWNERDRAW
+        mii.wID = cid
+        mii.dwItemData = cid
+        if not user32.InsertMenuItemW(m, it.pos, True, byref(mii)):
+            # 建不出来就退回普通文字项：菜单少一行提示，但功能不能丢
+            user32.AppendMenuW(m, MF_STRING | (MF_CHECKED if checked else 0),
+                               cid, label)
+            return None
+        self._items.append(it)
+        return it
+
+    def _append_language_menu(self, m):
+        """语言子菜单：列出所有语言，当前生效的那个打勾。"""
+        cfg = self.engine.cfg
+        sub = user32.CreatePopupMenu()
+        if not sub:
+            return
+        cur = cfg.language
+        for i, d in enumerate(i18n.LANGS):
+            flags = MF_STRING
+            if d["code"] == cur:
+                flags |= MF_CHECKED
+            user32.AppendMenuW(sub, flags, CMD_LANG_BASE + i, d["native"])
+        mii = MENUITEMINFOW()
+        mii.cbSize = ctypes.sizeof(MENUITEMINFOW)
+        mii.fMask = MIIM_SUBMENU | MIIM_STRING | MIIM_ID | MIIM_FTYPE
+        mii.fType = MF_STRING
+        mii.wID = CMD_LANG_MENU
+        mii.hSubMenu = sub
+        mii.dwTypeData = cfg.t("language")
+        user32.InsertMenuItemW(m, max(0, user32.GetMenuItemCount(m)), True,
+                               byref(mii))
+
+    def _toggle_by_id(self, item_id):
+        for it in self._items:
+            if it.cid == int(item_id):
+                return it
+        return None
+
+    def _hit_toggle(self, pt):
+        """光标落在哪个可绑快捷键的菜单项上？"""
+        for it in self._items:
+            if it.cid not in GlassConfig.BINDABLE_CMDS:
+                continue
+            rc = self._item_rect(it)
+            if rc is None:
+                continue
+            if rc.left <= pt.x < rc.right and rc.top <= pt.y < rc.bottom:
+                return it, rc
+        return None
+
+    def _spec_label(self, cid):
+        """冲突提示里要显示「被谁占了」，得拿到那一项的标题。"""
+        label, _checked = self._spec(cid)
+        return label
+
+    # ---------------- 快捷键：全局热键 ----------------
+    def _register_hotkeys(self) -> dict:
+        """把配置里所有已存的快捷键注册成全局热键。
+
+        RegisterHotKey 的 id 直接用**命令 ID**：WM_HOTKEY 的 wParam 就是它，
+        收到后直接丢给 _invoke，不需要再查表。
+        返回 {cid: 是否注册成功} —— 失败的大多是「被系统或其他程序占了」，
+        起程序时静默跳过即可（用户去菜单里重绑会看到提示）。
+        """
+        self._unregister_hotkeys()
+        result = {}
+        if not self.hwnd:
+            return result
+        for cid, text in sorted(self.engine.cfg.shortcuts.items()):
+            parsed = i18n.parse_combo(text)
+            if parsed is None:
+                continue
+            mods, vk = parsed
+            ok = bool(user32.RegisterHotKey(
+                wt.HWND(self.hwnd), int(cid), int(mods) | MOD_NOREPEAT, int(vk)))
+            result[int(cid)] = ok
+            if ok:
+                self._hotkeys[int(cid)] = True
+        return result
+
+    def _unregister_hotkeys(self):
+        for cid in list(self._hotkeys):
+            try:
+                user32.UnregisterHotKey(wt.HWND(self.hwnd), int(cid))
+            except Exception:
+                pass
+        self._hotkeys = {}
+
+    def _register_one(self, cid, mods, vk) -> bool:
+        """只注册一个（录制完成时用）。会先解绑这个 cid 上的旧绑定。"""
+        if not self.hwnd:
+            return False
+        try:
+            user32.UnregisterHotKey(wt.HWND(self.hwnd), int(cid))
+        except Exception:
+            pass
+        self._hotkeys.pop(int(cid), None)
+        ok = bool(user32.RegisterHotKey(
+            wt.HWND(self.hwnd), int(cid), int(mods) | MOD_NOREPEAT, int(vk)))
+        if ok:
+            self._hotkeys[int(cid)] = True
+        return ok
+
+    def _unbind(self, cid):
+        """解绑一个命令的快捷键（录制时按 Delete 走这里）。"""
+        try:
+            user32.UnregisterHotKey(wt.HWND(self.hwnd), int(cid))
+        except Exception:
+            pass
+        self._hotkeys.pop(int(cid), None)
+        self.engine.cfg.set_shortcut(cid, "")
+        self.engine.save_cfg(force=True)
+
+    # ---------------- 快捷键：录制 ----------------
+    def _start_recording(self, cid, rc=None):
+        """右键某个菜单项 → 进入录制状态。"""
+        if int(cid) not in GlassConfig.BINDABLE_CMDS:
+            return
+        if self._recording:
+            self._stop_recording()
+        self._recording = int(cid)
+        self._rec_pending = None
+        self._alerts.pop(int(cid), None)
+        self._install_kb_hook()
+        self._redraw_cid(int(cid))
+
+    def _stop_recording(self):
+        cid = self._recording
+        self._recording = 0
+        self._rec_pending = None
+        self._uninstall_kb_hook()
+        if cid:
+            self._redraw_cid(cid)
+
+    def _install_kb_hook(self):
+        """挂上低级别键盘钩子。
+
+        WH_KEYBOARD_LL 是**全局**钩子但不需要注入 DLL —— 回调在安装的那个线程
+        里跑，所以只要该线程有消息循环（托盘线程有）就能收到。
+        这也是唯一能在菜单开着时把按键抢过来的办法：菜单的模态循环会把
+        普通按键当成助记符/方向键自己吃掉，根本轮不到我们。
+        """
+        try:
+            self._kb_hook_ref = HOOKPROC(self._kb_proc)
+            self._kb_hook = user32.SetWindowsHookExW(
+                WH_KEYBOARD_LL, self._kb_hook_ref, None, 0) or 0
+        except Exception:
+            self._kb_hook = 0
+
+    def _uninstall_kb_hook(self):
+        if self._kb_hook:
+            try:
+                user32.UnhookWindowsHookEx(self._kb_hook)
+            except Exception:
+                pass
+            self._kb_hook = 0
+        self._kb_hook_ref = None        # 先摘钩子再丢引用
+
+    def _kb_proc(self, nCode, wParam, lParam):
+        """录制期间的键盘钩子回调：全部吞掉，只把结果交给录制状态机。"""
+        try:
+            if nCode >= 0 and lParam and self._recording:
+                kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                vk = int(kb.vkCode)
+                if int(kb.flags) & LLKHF_UP:
+                    self._on_rec_keyup(vk)
+                else:
+                    self._on_rec_keydown(vk)
+                # 返回非 0 = 吞掉这条按键：菜单/Open 对话框都不该再看到它
+                return 1
+        except Exception:
+            pass
+        return user32.CallNextHookEx(None, nCode, wParam, lParam)
+
+    def _mods_down(self) -> int:
+        """当前物理按住的修饰键位掩码。
+
+        用 GetAsyncKeyState 读**物理状态**，而不是在钩子里自己记账 ——
+        用户很可能在我们开始录制**之前**就按住了 Ctrl，那种情况记账会漏。
+        """
+        m = 0
+        try:
+            if user32.GetAsyncKeyState(VK_CONTROL) & 0x8000:
+                m |= i18n.MOD_CTRL
+            if user32.GetAsyncKeyState(VK_MENU) & 0x8000:
+                m |= i18n.MOD_ALT
+            if user32.GetAsyncKeyState(VK_SHIFT) & 0x8000:
+                m |= i18n.MOD_SHIFT
+            if (user32.GetAsyncKeyState(VK_LWIN) & 0x8000
+                    or user32.GetAsyncKeyState(VK_RWIN) & 0x8000):
+                m |= i18n.MOD_WIN
+        except Exception:
+            pass
+        return m
+
+    def _on_rec_keydown(self, vk):
+        cid = self._recording
+        if not cid:
+            return
+        if vk == VK_ESCAPE:                      # Esc = 取消录制
+            self._stop_recording()
+            return
+        mods = self._mods_down()
+        if vk in (VK_DELETE, VK_BACK) and not mods:
+            self._unbind(cid)                    # 单按 Delete/Backspace = 解绑
+            self._stop_recording()
+            return
+        if i18n.is_bindable_vk(vk):
+            # 记下候选，等**松手**才最终确认（用户要的是「按下并松开后完成」）
+            self._rec_pending = (mods, vk)
+
+    def _on_rec_keyup(self, vk):
+        cid = self._recording
+        pending = self._rec_pending
+        if not cid or not pending:
+            return
+        mods, p_vk = pending
+        if int(vk) != int(p_vk):
+            return                                # 松的是别的键，继续等
+        self._finish_bind(cid, mods, p_vk)
+
+    def _finish_bind(self, cid, mods, vk):
+        """录制完成：校验 → 查冲突 → 真注册一次 → 落盘。"""
+        cfg = self.engine.cfg
+        combo = i18n.format_combo(mods, vk)
+        # ① 键本身能不能当主键（修饰键 / Esc / 鼠标键都不行）
+        if not i18n.is_bindable_vk(vk):
+            self._set_alert(cid, cfg.t("shortcut_invalid"))
+            self._stop_recording()
+            return
+        # ② 是不是已经被别的菜单项占了
+        owner = cfg.owner_of_combo(combo, exclude_cid=cid)
+        if owner is not None:
+            self._set_alert(cid, cfg.t("shortcut_conflict",
+                                       name=self._spec_label(owner)))
+            self._stop_recording()
+            return
+        # ③ 真去注册一次：注册不上的（被系统/其它程序占用）就别存，
+        #    否则菜单上显示着一个「绑好了」却按不动的键，比不绑更糟。
+        if not self.hwnd:
+            # 没有托盘窗口（--no-tray）时无法注册，但仍然存下来，
+            # 下次带托盘启动时会自动生效。
+            cfg.set_shortcut(cid, combo)
+            self.engine.save_cfg(force=True)
+            self._stop_recording()
+            return
+        if not self._register_one(cid, mods, vk):
+            self._set_alert(cid, cfg.t("shortcut_failed"))
+            self._stop_recording()
+            return
+        cfg.set_shortcut(cid, combo)
+        self.engine.save_cfg(force=True)
+        self._stop_recording()
+
+    def _set_alert(self, cid, text):
+        """在那一项的灰色小字位置显示一次提示（冲突/失败），并立即重绘。"""
+        self._alerts[int(cid)] = text
+        self._redraw_cid(int(cid))
+
+    def _redraw_cid(self, cid):
+        it = self._toggle_by_id(cid)
+        if it is None:
+            return
+        rc = self._item_rect(it)
+        if rc is not None:
+            self._redraw_item(rc)
 
     def _popup(self):
         m = self._build_menu()
@@ -2102,6 +2811,9 @@ class TrayIcon:
                                         pt.x, pt.y, 0, self.hwnd, None)
         finally:
             self._uninstall_menu_hook()
+            # 录制中菜单被关掉（点了别处 / Esc）→ 必须把键盘钩子摘掉，
+            # 否则会一直吞按键，整个系统的键盘都失灵。这是本功能最危险的一处泄漏。
+            self._stop_recording()
             self._menu_hwnd = 0
             self._dragging = False
         user32.PostMessageW(self.hwnd, WM_NULL, 0, 0)
@@ -2178,10 +2890,16 @@ class TrayIcon:
                          int(mis.itemWidth), int(mis.itemHeight)))
             if int(mis.CtlType) != ODT_MENU:
                 return
-            if self._slider_by_id(mis.itemID) is None:
+            # 滑块 vs 两行菜单项：谁命中就按谁的尺寸回。两者都走这一条
+            # WM_MEASUREITEM 通道，靠 itemID 区分。
+            if self._slider_by_id(mis.itemID) is not None:
+                mis.itemWidth = SLIDER_ITEM_W
+                mis.itemHeight = SLIDER_ITEM_H
+            elif self._toggle_by_id(mis.itemID) is not None:
+                mis.itemWidth = SLIDER_ITEM_W
+                mis.itemHeight = TOGGLE_ITEM_H
+            else:
                 return
-            mis.itemWidth = SLIDER_ITEM_W
-            mis.itemHeight = SLIDER_ITEM_H
             self._probe(("measure-set", 0, int(mis.itemID),
                          int(mis.itemWidth), int(mis.itemHeight)))
         except Exception:
@@ -2196,12 +2914,16 @@ class TrayIcon:
             if int(dis.CtlType) != ODT_MENU:
                 return
             sl = self._slider_by_id(dis.itemID)
-            if sl is None:
+            if sl is not None:
+                # hot：悬停（选中）或正在拖动时，手柄放大一圈，与音量条一致
+                hot = bool(self._dragging) or bool(dis.itemState & ODS_SELECTED)
+                draw_menu_slider(dis, sl.label, sl.lo, sl.hi, int(sl.get()), hot,
+                                 sl.text())
                 return
-            # hot：悬停（选中）或正在拖动时，手柄放大一圈，与音量条一致
-            hot = bool(self._dragging) or bool(dis.itemState & ODS_SELECTED)
-            draw_menu_slider(dis, sl.label, sl.lo, sl.hi, int(sl.get()), hot,
-                             sl.text())
+            it = self._toggle_by_id(dis.itemID)
+            if it is not None:
+                draw_menu_toggle(dis, it.label, self._hint_for(it.cid),
+                                 it.checked, self._is_alert_hint(it.cid))
         except Exception as e:
             if self.engine.cfg.verbose:
                 print("[win_glass] 绘制滑块失败：%r" % (e,))
@@ -2235,14 +2957,19 @@ class TrayIcon:
                 # shell 的 SystemUserAdapterWindowClass，把它当成菜单窗口缓存下来之后，
                 # InvalidateRect 全打在无关窗口上，菜单永远不会重绘。
                 # 症状就是「拖动时数值和进度条怎么都不刷新，指针一移出去才刷新」。
+                # v1.7.0：菜单窗口一出现就给它套上 Win11 的圆角偏好。
+                # 必须**在这里**做 —— 只有此刻才拿得到真实的 #32768 句柄。
                 if not self._menu_hwnd and msg.hwnd and _win_class(msg.hwnd) == MENU_CLASS:
                     self._menu_hwnd = _h(msg.hwnd)
+                    self._rounded = set_menu_corner_preference(self._menu_hwnd)
                     if DBG_REDRAW:
                         print("[dbg] captured _menu_hwnd=0x%X class=%s (msg=0x%04X)"
                               % (self._menu_hwnd, _win_class(msg.hwnd), int(msg.message)))
                 mtype = int(msg.message)
                 if mtype in (WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP,
-                             WM_MOUSEWHEEL, WM_KEYDOWN):
+                             WM_MOUSEWHEEL, WM_KEYDOWN,
+                             # v1.7.0：右键菜单项 = 进入快捷键录制
+                             WM_RBUTTONDOWN, WM_RBUTTONUP):
                     if mtype == WM_MOUSEMOVE:
                         self.msg_counts["mouse"] += 1
                     elif mtype == WM_MOUSEWHEEL:
@@ -2273,8 +3000,22 @@ class TrayIcon:
                     self._apply_slider(sl, rc, sl.hit_frac_to_pct(pt.x, rc))
             return False
         if mtype == WM_KEYDOWN:
+            # 录制中：所有按键都归录制状态机，滑块的方向键微调让路
+            if self._recording:
+                return True
             return self._handle_slider_key(int(msg.wParam))
         pt = wt.POINT(int(msg.pt.x), int(msg.pt.y))
+        if mtype in (WM_RBUTTONDOWN, WM_RBUTTONUP):
+            # v1.7.0 右键某项 = 录快捷键。两个消息都要吞掉：
+            # 吞 RBUTTONUP 是为了不让 Windows 把它当成「选中并关闭菜单」。
+            if mtype == WM_RBUTTONUP:
+                if self._recording:
+                    self._stop_recording()      # 右键空白处 = 取消录制
+                else:
+                    hit = self._hit_toggle(pt)
+                    if hit:
+                        self._start_recording(hit[0].cid, hit[1])
+            return True
         hit = self._hit_slider(pt)
         if hit is None:
             if mtype == WM_LBUTTONUP:
@@ -2415,6 +3156,12 @@ class TrayIcon:
         if cid in (CMD_SLIDE_INACTIVE, CMD_SLIDE_ACTIVE,
                    CMD_SLIDE_HOVER, CMD_SLIDE_DECAY):
             return                       # 滑块靠钩子拖动，不走命令逻辑
+        if CMD_LANG_BASE <= cid < CMD_LANG_BASE + len(i18n.LANGS):
+            # v1.7.0 语言子菜单：每一项的 ID 是 CMD_LANG_BASE + 序号
+            self.engine.set_language(i18n.LANGS[cid - CMD_LANG_BASE]["code"])
+            return
+        if cid == CMD_LANG_MENU:
+            return                       # 只是个子菜单的父项，点了没动作
         if cid == CMD_TOGGLE:
             self.engine.set_paused(not self.engine.paused)
         elif cid == CMD_RESTORE:
@@ -2593,6 +3340,20 @@ class GlassEngine:
                      " / ".join("%d%%" % layer_pct(self.cfg.inactive_pct, d,
                                                    self.cfg.layer_decay_ratio)
                                 for d in range(1, 5))))
+
+    def set_language(self, code: str):
+        """切换界面语言并立即落盘。
+
+        这里**不需要**重算透明度（语言只影响菜单文字），所以不像别的 set_*
+        那样置 _dirty —— 改语言不该让整屏窗口抖一下。
+        """
+        if not code:
+            return
+        with self.lock:
+            self.cfg.language = code
+        self.save_cfg(force=True)
+        print("[win_glass] 界面语言 → %s（%s）"
+              % (i18n.lang_name(code), self.cfg.lang_effective))
 
     def save_cfg(self, force: bool = False):
         """写配置文件。拖动滑块时会频繁触发，所以节流到 0.3s 一次；
@@ -2973,7 +3734,7 @@ class GlassEngine:
 
         if self.cfg.tray:
             try:
-                self.tray = TrayIcon(self)
+                self.tray = TrayIcon(self, tip=self.cfg.t("tip"))
                 if self.tray.start():
                     print("[win_glass] 托盘图标已就位（左键暂停/继续，右键菜单可退出）")
                 else:
@@ -3245,6 +4006,13 @@ def main() -> int:
     ap.add_argument("--layer-decay-ratio", type=float, default=None,
                     help="层衰减系数 0.1~1.0，默认 0.70：普通非聚焦窗口每往下"
                          "一层就乘一次它（上一层取整后的显示值），下限 5%%")
+    ap.add_argument("--lang", default=None,
+                    help="界面语言，如 zh_CN / en_US / ja_JP / de_DE …；"
+                         "auto = 跟随系统（默认）。可用值见 --list-langs")
+    ap.add_argument("--list-langs", action="store_true",
+                    help="列出所有可用语言后退出")
+    ap.add_argument("--reset-shortcuts", action="store_true",
+                    help="清空所有已绑定的菜单快捷键后退出")
     ap.add_argument("--fps", type=int, default=60, help="动画帧率，默认 60")
     ap.add_argument("--scan", type=float, default=0.15, help="目标重算间隔(秒)，默认 0.15")
     ap.add_argument("--rescan", type=float, default=0.50, help="窗口全量枚举间隔(秒)，默认 0.50")
@@ -3280,6 +4048,10 @@ def main() -> int:
     # 全屏锁定：--skip-fullscreen（关）> 配置文件 > 内置默认（开）
     fs_lock = GlassConfig.apply_saved_fs(
         saved, False if args.skip_fullscreen else None)
+    # 语言 / 快捷键：命令行 > 配置文件 > 内置默认（v1.7.0）
+    lang, shortcuts = GlassConfig.apply_saved_lang(
+        saved, args.lang,
+        {} if args.reset_shortcuts else None)
     cfg = GlassConfig(
         inactive_alpha=inactive,
         active_alpha=active,
@@ -3300,7 +4072,23 @@ def main() -> int:
         hover_interval=args.hover_interval,
         layer_decay=layer_decay,
         layer_decay_ratio=layer_ratio,
+        language=lang,
+        shortcuts=shortcuts,
     )
+    if args.list_langs:
+        print("可用语言（--lang 取值）：")
+        for d in i18n.LANGS:
+            mark = " *" if d["code"] == cfg.language else ""
+            print("  %-8s %-22s %s%s"
+                  % (d["code"], d["native"], d["english"], mark))
+        return 0
+    if args.reset_shortcuts:
+        n = len(cfg.shortcuts)
+        cfg.shortcuts = {}
+        print("[win_glass] 已清空 %d 个快捷键绑定%s"
+              % (n, "（写入配置文件）" if cfg.save() else "（配置文件写入失败，"
+                 "本次仅内存生效）"))
+        return 0
     if args.save_config and not args.no_config:
         if cfg.save():
             print("[win_glass] 已写入配置 %s：非聚焦=%d%%  聚焦/最大化/置顶=%d%%"

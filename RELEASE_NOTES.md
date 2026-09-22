@@ -1,8 +1,7 @@
-# v1.6.0 — 层叠衰减：未聚焦窗口按堆叠顺序逐层递减
+# v1.7.0 — 托盘菜单：右键绑全局快捷键 / 13 种界面语言 / Win11 圆角
 
-> **一句话**：以前 4 个未聚焦窗口都是同一个透明度，彼此**没有任何层次**；
-> 现在它们会按 **Windows 的堆叠顺序（Z 序）从上到下逐层递减** ——
-> 最上面那个未聚焦窗口用「非聚焦最低透明度」，往下每层乘一次「层衰减系数」（默认 0.70，下限 5%）。
+> **一句话**：右键托盘菜单里任意一项就能**录一个全局快捷键**（按下即绑、自动保存）；
+> 菜单底部多了「语言」子菜单，内置 13 种语言随时切换；菜单边框自动适配 Windows 11 圆角。
 
 让当前正在用的窗口保持清晰、其余窗口自动变半透明的小工具。常驻系统托盘，退出时全部还原。
 
@@ -12,31 +11,31 @@
 
 | 文件 | 大小 | 说明 |
 | --- | --- | --- |
-| `win_glass_setup_v1.6.0.exe` | 29.8 MB | **安装包**（双击即装，**不需要管理员权限**，不弹 UAC） |
-| `win_glass_setup_v1.6.0.exe.sha256` | 94 B | 上述文件的 SHA256 校验值 |
+| `win_glass_setup_v1.7.0.exe` | 29.9 MB | **安装包**（双击即装，**不需要管理员权限**，不弹 UAC） |
+| `win_glass_setup_v1.7.0.exe.sha256` | 94 B | 上述文件的 SHA256 校验值 |
 
 包内已含运行时，**目标机器不需要安装 Python**。
 
 ```
-957f9f7755a82d351c5ed9e058f05db19385b9268ee27bb29a836940cc01821a  win_glass_setup_v1.6.0.exe
+282d9ebcfd300418907ca651e5fab629f7bd861dfcf9eae6e01db9bb62c9c2bd  win_glass_setup_v1.7.0.exe
 ```
 
 ### 校验下载文件
 
 ```bash
 # Linux / macOS
-sha256sum -c win_glass_setup_v1.6.0.exe.sha256
+sha256sum -c win_glass_setup_v1.7.0.exe.sha256
 ```
 ```powershell
 # Windows PowerShell
-(Get-FileHash .\win_glass_setup_v1.6.0.exe -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash .\win_glass_setup_v1.7.0.exe -Algorithm SHA256).Hash.ToLower()
 ```
 
 ---
 
 ## 🚀 安装与使用
 
-1. 双击 `win_glass_setup_v1.6.0.exe`
+1. 双击 `win_glass_setup_v1.7.0.exe`
    > 安装包本身是命令行程序，会有一个黑窗口显示安装进度，属正常现象。
    > 从旧版本升级安装**直接覆盖即可**，配置文件里已有的取值会保留。
 2. 开始菜单搜索 **win_glass** 打开 → **不会再有任何命令行窗口**

@@ -23,7 +23,7 @@ ICON = os.path.join(HERE, "icon.ico")
 DIST = os.path.join(HERE, "dist")
 BUILD = os.path.join(HERE, "build")
 SPEC = os.path.join(BUILD, "spec")
-VER = "1.6.0"
+VER = "1.7.0"
 SETUP_NAME = "win_glass_setup_v%s" % VER
 
 # 版本号只在这里写一次 —— 以前 VERSION_FILE 里又手抄了两份（filevers / FileVersion /
