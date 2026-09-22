@@ -981,7 +981,7 @@ class GlassConfig:
     DEFAULT_LANG = i18n.DEFAULT_LANG
     # 可以给「菜单项命令」绑全局快捷键的那些命令 ID。
     # 滑块不给绑：它本身是靠鼠标拖的，绑热键没有意义，还会让人误会。
-    BINDABLE_CMDS = (CMD_TOGGLE, CMD_RESTORE, CMD_HOVER, CMD_FULLSCREEN,
+    BINDABLE_CMDS = (CMD_TOGGLE, CMD_HOVER, CMD_FULLSCREEN,
                      CMD_LAYER, CMD_FADE_MS, CMD_LOG, CMD_QUIT)
 
     def __init__(self, inactive_alpha=0.40, active_alpha=1.00, fade_ms=500, fps=60,
@@ -2447,7 +2447,6 @@ class TrayIcon:
         self._items = []
         # ① 上面一排开关（两行：标题 + 灰色快捷键提示）
         self._append_toggle(m, CMD_TOGGLE, *self._spec(CMD_TOGGLE))
-        self._append_toggle(m, CMD_RESTORE, *self._spec(CMD_RESTORE))
         self._append_toggle(m, CMD_HOVER, *self._spec(CMD_HOVER))
         self._append_toggle(m, CMD_FULLSCREEN, *self._spec(CMD_FULLSCREEN))
         self._append_toggle(m, CMD_LAYER, *self._spec(CMD_LAYER))
@@ -2828,18 +2827,18 @@ class TrayIcon:
         """把四个滑块作为 owner-draw 菜单项插进菜单。"""
         cfg = self.engine.cfg
         sliders = [
-            MenuSlider(CMD_SLIDE_INACTIVE, "非聚焦最低透明度",
+            MenuSlider(CMD_SLIDE_INACTIVE, cfg.t("inactive"),
                        cfg.INACTIVE_MIN_PCT, cfg.INACTIVE_MAX_PCT,
                        lambda: self.engine.cfg.inactive_pct,
                        lambda v: self.engine.set_alpha_targets(inactive_pct=v)),
-            MenuSlider(CMD_SLIDE_ACTIVE, "聚焦最高透明度",
+            MenuSlider(CMD_SLIDE_ACTIVE, cfg.t("active"),
                        cfg.ACTIVE_MIN_PCT, cfg.ACTIVE_MAX_PCT,
                        lambda: self.engine.cfg.active_pct,
                        lambda v: self.engine.set_alpha_targets(active_pct=v)),
             # 悬停插值系数（v1.5.0）：内部档位 0~10，显示成 0.0~1.0。
             # 悬停值 = 最低 + (最高 − 最低) × 系数，所以拖它就能实时看到
             # 上面那行「悬停半透明（未聚焦窗口 → xx%）」跟着变。
-            MenuSlider(CMD_SLIDE_HOVER, "悬停插值系数",
+            MenuSlider(CMD_SLIDE_HOVER, cfg.t("hover_ratio"),
                        0, cfg.HOVER_RATIO_UNITS,
                        lambda: int(round(
                            self.engine.cfg.hover_ratio * cfg.HOVER_RATIO_UNITS)),
@@ -2849,7 +2848,7 @@ class TrayIcon:
             # 层衰减系数（v1.6.0）：同样是内部 0~10 档、显示成 0.0~1.0。
             # 普通非聚焦窗口每往下一层就乘一次它，拖动时上面那行
             # 「层叠衰减（第 1 层 xx%，之后每层 ×0.7，下限 5%）」会立刻跟着变。
-            MenuSlider(CMD_SLIDE_DECAY, "层衰减系数",
+            MenuSlider(CMD_SLIDE_DECAY, cfg.t("decay"),
                        0, cfg.LAYER_DECAY_UNITS,
                        lambda: int(round(
                            self.engine.cfg.layer_decay_ratio
@@ -4008,7 +4007,7 @@ def main() -> int:
                          "一层就乘一次它（上一层取整后的显示值），下限 5%%")
     ap.add_argument("--lang", default=None,
                     help="界面语言，如 zh_CN / en_US / ja_JP / de_DE …；"
-                         "auto = 跟随系统（默认）。可用值见 --list-langs")
+                         "auto = 跟随系统；默认 en_US。可用值见 --list-langs")
     ap.add_argument("--list-langs", action="store_true",
                     help="列出所有可用语言后退出")
     ap.add_argument("--reset-shortcuts", action="store_true",

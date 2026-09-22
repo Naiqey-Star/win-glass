@@ -54,7 +54,7 @@ _SYS_LANG_MAP = {
     0x09: "en_US",     # LANG_ENGLISH
 }
 
-DEFAULT_LANG = "auto"
+DEFAULT_LANG = "en_US"
 FALLBACK_LANG = "en_US"
 
 # --------------------------------------------------------------------------

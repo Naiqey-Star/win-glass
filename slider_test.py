@@ -746,16 +746,19 @@ def test_menu_content():
           "实际 %d" % len(tray._sliders))
     # owner-draw 项在菜单里不存文字（文字是我们自己画的），所以标签只能从
     # MenuSlider 上取；菜单里能查的是位置和 ID。
-    check("第一个滑块是「非聚焦最低透明度」",
-          tray._sliders[0].label == "非聚焦最低透明度",
+    # 滑块标签现在走 i18n（v1.7.0 修复「多语言对滑块说明不生效」），
+    # 断言对齐当前语言的文案键，而不是写死中文。
+    c = tray.engine.cfg
+    check("第一个滑块标签 = i18n「inactive」",
+          tray._sliders[0].label == c.t("inactive"),
           tray._sliders[0].label if tray._sliders else "(无)")
-    check("第二个滑块是「聚焦最高透明度」",
-          len(tray._sliders) > 1 and tray._sliders[1].label == "聚焦最高透明度")
-    check("第三个滑块是「悬停插值系数」（v1.5.0）",
-          len(tray._sliders) > 2 and tray._sliders[2].label == "悬停插值系数",
+    check("第二个滑块标签 = i18n「active」",
+          len(tray._sliders) > 1 and tray._sliders[1].label == c.t("active"))
+    check("第三个滑块标签 = i18n「hover_ratio」（v1.5.0）",
+          len(tray._sliders) > 2 and tray._sliders[2].label == c.t("hover_ratio"),
           tray._sliders[2].label if len(tray._sliders) > 2 else "(无)")
-    check("第四个滑块是「层衰减系数」（v1.6.0）",
-          len(tray._sliders) > 3 and tray._sliders[3].label == "层衰减系数",
+    check("第四个滑块标签 = i18n「decay」（v1.6.0）",
+          len(tray._sliders) > 3 and tray._sliders[3].label == c.t("decay"),
           tray._sliders[3].label if len(tray._sliders) > 3 else "(无)")
     check("滑块在菜单里紧挨着（位置连续且递增）",
           len(tray._sliders) == 4
@@ -822,8 +825,9 @@ def test_menu_content():
     eng.set_fullscreen_lock(False)
     m3 = tray._build_menu()
     t3 = {it.cid: it for it in tray._items}
-    check("关掉全屏锁定后菜单文字提示「完全不接管」",
-          "完全不接管" in t3[wg.CMD_FULLSCREEN].label, t3[wg.CMD_FULLSCREEN].label)
+    check("关掉全屏锁定后菜单文字提示「当前不接管全屏」（i18n 对齐）",
+          t3[wg.CMD_FULLSCREEN].label == eng.cfg.t("fullscreen_off"),
+          t3[wg.CMD_FULLSCREEN].label)
     check("  且该项不再处于勾选态", not t3[wg.CMD_FULLSCREEN].checked)
     u.DestroyMenu(m3)
     eng.set_fullscreen_lock(True)

@@ -156,8 +156,10 @@ def main():
     sliders = tray._sliders
     # v1.6.0 起滑块有 4 个：非聚焦最低 / 聚焦最高 / 悬停插值系数 / 层衰减系数。
     # 断言写成「标签集合 + 数量」而不是硬编码数字，下次再加一个不会又假失败。
-    want_labels = ["非聚焦最低透明度", "聚焦最高透明度", "悬停插值系数", "层衰减系数"]
-    check("菜单里的滑块是预期的那 4 个",
+    # 滑块标签走 i18n（v1.7.0 修复），用当前语言的文案键断言，不写死中文。
+    want_labels = [tray.engine.cfg.t(k) for k in
+                   ("inactive", "active", "hover_ratio", "decay")]
+    check("菜单里的滑块是预期的那 4 个（i18n 对齐）",
           [s.label for s in sliders] == want_labels,
           "实际 %d 个: %s" % (len(sliders), [s.label for s in sliders]))
     if len(sliders) < 2:
