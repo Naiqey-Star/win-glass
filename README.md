@@ -1,3 +1,22 @@
+<a id="top"></a>
+
+> **📑 目录 · Contents** — 点击快速跳转 / click to jump
+
+| 语言 Language | 版本 Version |
+| --- | --- |
+| [**English ⬇**](#english) | 英文版（置顶 / pinned on top） |
+| [**简体中文 ⬇**](#chinese) | 中文版 |
+
+**English** · [Download & Install](#download--install) · [Quick Start](#quick-start) · [Using the System Tray](#using-the-system-tray) · [Cascade decay](#cascade-decay-by-window-stacking-order) · [Command-line Arguments](#command-line-arguments) · [How It Works](#how-it-works) · [FAQ](#faq) · [Known Limitations](#known-limitations) · [Build from Source](#build-from-source) · [Project Structure](#project-structure) · [License](#license)
+
+**中文版** · [下载安装](#下载安装) · [快速上手](#快速上手) · [系统托盘怎么用](#系统托盘怎么用) · [层叠衰减](#层叠衰减按窗口堆叠顺序逐层递减) · [命令行参数](#命令行参数) · [它是怎么做到的](#它是怎么做到的) · [常见问题](#常见问题) · [已知限制](#已知限制) · [从源码构建](#从源码构建) · [项目结构](#项目结构) · [许可](#许可)
+
+[↑ 回到顶部 / back to top](#top)
+
+---
+
+<a id="english"></a>
+
 # win-glass · Windows lightweight desktop window beautifier — keep your wallpaper always visible (≧∇≦)ﾉ
 
 > **Keep the window you're actively using crystal clear; let every other window fade to translucency automatically.**
@@ -552,6 +571,8 @@ This means the code is publicly visible, but by default grants **no** rights to 
 <sub>Author: Naiqey.千鵺 <1609458331@qq.com></sub>
 
 ---
+
+<a id="chinese"></a>
 
 # win-glass · Windows 轻量桌面窗口美化工具--让你的壁纸随时可见(≧∇≦)ﾉ
 
