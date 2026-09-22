@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 400" width="900" height="400" font-family="'Segoe UI','Microsoft YaHei',system-ui,sans-serif">
+  <defs>
+    <marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#5b6b8c"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="900" height="400" rx="14" fill="#f7f9fc"/>
+  <rect x="0.5" y="0.5" width="899" height="399" rx="13.5" fill="none" stroke="#dbe3f0"/>
+
+  <text x="34" y="44" font-size="19" font-weight="700" fill="#1f2d45">How win-glass works</text>
+  <text x="34" y="68" font-size="13" fill="#6b7a99">Adjusts window opacity by focus in real time · 500ms smooth · restored on exit</text>
+
+  <!-- left: screen -->
+  <rect x="34" y="94" width="404" height="272" rx="12" fill="#ffffff" stroke="#dbe3f0"/>
+  <rect x="34" y="94" width="404" height="34" rx="12" fill="#eef3fb"/>
+  <rect x="34" y="116" width="404" height="12" fill="#eef3fb"/>
+  <circle cx="52" cy="111" r="5" fill="#cfd9ea"/>
+  <circle cx="70" cy="111" r="5" fill="#cfd9ea"/>
+  <circle cx="88" cy="111" r="5" fill="#cfd9ea"/>
+  <text x="236" y="116" font-size="12" fill="#8294b3">Desktop</text>
+
+  <!-- back windows (translucent) -->
+  <g opacity="0.4">
+    <rect x="62" y="168" width="180" height="128" rx="8" fill="#9fb2d4" stroke="#8fa3c9"/>
+    <rect x="62" y="168" width="180" height="22" rx="8" fill="#8fa3c9"/>
+    <text x="76" y="184" font-size="11" fill="#ffffff">Browser</text>
+    <rect x="78" y="204" width="130" height="7" rx="3.5" fill="#7b90ba"/>
+    <rect x="78" y="219" width="148" height="7" rx="3.5" fill="#7b90ba"/>
+    <rect x="78" y="234" width="104" height="7" rx="3.5" fill="#7b90ba"/>
+  </g>
+  <g opacity="0.4">
+    <rect x="150" y="238" width="176" height="112" rx="8" fill="#9fb2d4" stroke="#8fa3c9"/>
+    <rect x="150" y="238" width="176" height="22" rx="8" fill="#8fa3c9"/>
+    <text x="164" y="254" font-size="11" fill="#ffffff">Chat</text>
+    <rect x="166" y="274" width="120" height="7" rx="3.5" fill="#7b90ba"/>
+    <rect x="166" y="289" width="142" height="7" rx="3.5" fill="#7b90ba"/>
+  </g>
+
+  <!-- front window (100%) -->
+  <rect x="228" y="146" width="192" height="182" rx="9" fill="#ffffff" stroke="#2f6bff" stroke-width="2"/>
+  <rect x="228" y="146" width="192" height="26" rx="9" fill="#2f6bff"/>
+  <rect x="228" y="162" width="192" height="10" fill="#2f6bff"/>
+  <text x="242" y="165" font-size="11.5" fill="#ffffff" font-weight="600">Active window</text>
+  <rect x="246" y="188" width="130" height="8" rx="4" fill="#c8d6f5"/>
+  <rect x="246" y="205" width="156" height="8" rx="4" fill="#c8d6f5"/>
+  <rect x="246" y="222" width="112" height="8" rx="4" fill="#c8d6f5"/>
+  <rect x="246" y="239" width="146" height="8" rx="4" fill="#c8d6f5"/>
+
+  <g>
+    <rect x="244" y="266" width="160" height="26" rx="13" fill="#e7f0ff" stroke="#b9d0ff"/>
+    <text x="324" y="283" font-size="12" font-weight="600" fill="#1b4fd8" text-anchor="middle">100%  fully opaque</text>
+  </g>
+  <g>
+    <rect x="58" y="306" width="146" height="24" rx="12" fill="#eef2f9" stroke="#d5dfef"/>
+    <text x="131" y="322" font-size="11.5" font-weight="600" fill="#68789a" text-anchor="middle">Others 40%</text>
+  </g>
+
+  <!-- right: flow -->
+  <text x="470" y="118" font-size="13.5" font-weight="700" fill="#1f2d45">How it runs</text>
+
+  <rect x="470" y="134" width="396" height="56" rx="10" fill="#ffffff" stroke="#dbe3f0"/>
+  <circle cx="498" cy="162" r="14" fill="#2f6bff"/>
+  <text x="498" y="167" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">1</text>
+  <text x="524" y="158" font-size="13" font-weight="600" fill="#243352">Enumerate &amp; filter top-level windows</text>
+  <text x="524" y="176" font-size="11.5" fill="#7b8aa8">Skip desktop / taskbar / IME / tooltips / fullscreen</text>
+
+  <line x1="668" y1="190" x2="668" y2="206" stroke="#5b6b8c" stroke-width="1.6" marker-end="url(#arw)"/>
+
+  <rect x="470" y="208" width="396" height="56" rx="10" fill="#ffffff" stroke="#dbe3f0"/>
+  <circle cx="498" cy="236" r="14" fill="#2f6bff"/>
+  <text x="498" y="241" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">2</text>
+  <text x="524" y="232" font-size="13" font-weight="600" fill="#243352">Compute each window's target opacity</text>
+  <text x="524" y="250" font-size="11.5" fill="#7b8aa8">Focused or topmost → 100%   others → 40%</text>
+
+  <line x1="668" y1="264" x2="668" y2="280" stroke="#5b6b8c" stroke-width="1.6" marker-end="url(#arw)"/>
+
+  <rect x="470" y="282" width="396" height="56" rx="10" fill="#ffffff" stroke="#dbe3f0"/>
+  <circle cx="498" cy="310" r="14" fill="#2f6bff"/>
+  <text x="498" y="315" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">3</text>
+  <text x="524" y="306" font-size="13" font-weight="600" fill="#243352">On change, run a 500ms easing animation</text>
+  <text x="524" y="324" font-size="11.5" fill="#7b8aa8">Per-frame WS_EX_LAYERED + SetLayeredWindowAttributes</text>
+
+  <rect x="470" y="348" width="396" height="34" rx="9" fill="#eaf6ee" stroke="#bfe3cb"/>
+  <text x="486" y="370" font-size="12" font-weight="600" fill="#1c6b3c">On exit / logoff / shutdown: restore opacity &amp; styles</text>
+</svg>

@@ -1,3 +1,558 @@
+# win-glass · Windows lightweight desktop window beautifier — keep your wallpaper always visible (≧∇≦)ﾉ
+
+> **Keep the window you're actively using crystal clear; let every other window fade to translucency automatically.**
+> Pure Python standard library (`ctypes`), no pywin32 dependency, no background service — fully restored on exit.
+
+Ever had this: a dozen windows open, and the one you're actually using keeps getting lost behind the others?
+
+**win-glass** solves exactly that. It lives in the system tray and watches window focus in real time —
+
+| Window state | Opacity |
+| --- | --- |
+| **Fullscreen window** (game / video / presentation) | **100%** fixed, unaffected by any setting |
+| **The window you're using** (has focus) | **90%** fully opaque (adjustable) |
+| **Maximized / topmost window** (Always on Top) | **90%** treated as focused (adjustable) |
+| 1st unfocused layer | **50%** translucent (adjustable) |
+| 2nd layer and below | **previous layer × 70% (adjustable)**, cascading down, floor 5% |
+
+When focus changes, opacity transitions smoothly within **500ms (adjustable)** — no hard jumps. When the stacking order changes, every layer's target is **recomputed across the whole chain** (see [Cascade decay](#cascade-decay-by-window-stacking-order)).
+
+![How it works](assets/how-it-works.en.svg)
+
+---
+
+## Table of Contents
+
+- [Download & Install](#download--install)
+- [Quick Start](#quick-start)
+- [Using the System Tray](#using-the-system-tray)
+- [Cascade decay (by window stacking order)](#cascade-decay-by-window-stacking-order)
+- [Command-line Arguments](#command-line-arguments)
+- [How It Works](#how-it-works)
+- [FAQ](#faq)
+- [Known Limitations](#known-limitations)
+- [Build from Source](#build-from-source)
+- [Project Structure](#project-structure)
+- [License](#license)
+
+---
+
+## Download & Install
+
+Download `win_glass_setup_v1.7.0.exe` from the [**Releases page**](../../releases/latest) and double-click.
+
+| Item | Notes |
+| --- | --- |
+| Requirements | Windows 10 / 11 (64-bit) |
+| Need Python? | **No** — the runtime is bundled in the installer |
+| Need admin? | **No** — no UAC prompt |
+| Install location | `%LOCALAPPDATA%\Programs\win_glass` (user dir) |
+| Uninstall | Control Panel » Programs and Features » win_glass; or run `uninstall.exe` in the install dir |
+
+After install, search **win_glass** in the Start menu to launch.
+
+> The installer itself is a command-line program; double-clicking shows a black window with progress — that's normal. Once installed, the daily `win_glass.exe` has **no window at all** — just a tray icon in the bottom-right.
+
+---
+
+## Quick Start
+
+1. Double-click `win_glass_setup_v1.7.0.exe` to install
+2. Search `win_glass` in the Start menu to launch
+3. A tray icon appears bottom-right → **it's already working**
+4. Click around a few windows: the one you're using stays clear, the rest fade
+
+Want it to start at login? Run as a normal (non-admin) user:
+
+```bat
+win_glass_setup_v1.7.0.exe --autostart
+```
+
+Disable autostart: `win_glass_setup_v1.7.0.exe --no-autostart`
+
+---
+
+## Using the System Tray
+
+Daily use only needs the tray icon — no commands to memorize:
+
+| Action | Effect |
+| --- | --- |
+| **Left click** | Pause / resume (when paused, **all windows snap back to 100%**) |
+| **Right click** | Pop menu: pause, hover toggle, fullscreen toggle, cascade decay, **four sliders**, **fade time**, **language**, open log, quit |
+| **Right-click a menu item** | Enter **shortcut recording**: press a key or combo to bind & auto-save; right-click empty area / Esc cancels |
+
+The tray icon **doesn't appear in the taskbar or Alt+Tab** — it stays out of the way.
+
+> On exit (whether you click Quit, log off, or shut down) the program restores **every window's opacity and style exactly as before**. If something crashed and it didn't restore, just run it once more and quit normally.
+
+### The four sliders in the right-click menu
+
+Adjust opacity, hover factor and cascade decay right in the menu — no commands, no restart:
+
+```
+┌──────────────────────────────────┐
+│ Pause (all windows → 100%)        │
+│ Hover translucency (bg → 88%)     │
+│ Fullscreen locked to 100%         │
+│ Cascade decay (L1~L4 40/28/20/14%)│  ← click to toggle
+├──────────────────────────────────┤
+│ Min opacity (unfocused)    40%    │  ← drag / wheel / ←→
+│ ●━━━━━━━━━━━━━━━○────────────    │
+│ Max opacity (focused)      100%   │
+│ ●━━━━━━━━━━━━━━━━━━━━━━━━━━○     │
+│ Hover blend factor           0.8  │  ← 0.0~1.0 step 0.1
+│ ●━━━━━━━━━━━━━━━━━━━━━━━○─────   │
+│ Layer decay factor           0.7  │  ← 0.1~1.0 step 0.1
+│ ●━━━━━━━━━━━━━○──────────────    │
+├──────────────────────────────────┤
+│ Fade time…                 500 ms │  ← type milliseconds
+├──────────────────────────────────┤
+│ Language (13)                     │  ← applies instantly
+├──────────────────────────────────┤
+│ Open log                          │
+│ Quit (restore all windows)        │
+└──────────────────────────────────┘
+```
+
+| Slider | What it does | Range | Step | Default |
+| --- | --- | --- | --- | --- |
+| **Min opacity (unfocused)** | How faint the topmost unfocused window gets | **5% ~ 95%** | 1% | 40% |
+| **Max opacity (focused)** | How clear the window you're using gets | **5% ~ 100%** | 1% | 100% |
+| **Hover blend factor** | How bright the unfocused window under the cursor gets | **0.0 ~ 1.0** | 0.1 | 0.8 |
+| **Layer decay factor** | What each deeper layer is multiplied by | **0.1 ~ 1.0** | 0.1 | 0.7 |
+
+- **Hover blend factor** (v1.5.0): hover value = `min + (max − min) × factor`. Factor `0.0` = equals the min (visually same as hover off); `0.5` = right in the middle; `1.0` = equals the max. Default `0.8` leans toward "clearer" — the window under the cursor brightens noticeably. Drag it and **the "Hover translucency (→ xx%)" line above updates live** — what you see is what you get.
+- **Layer decay factor** (v1.6.0): see [Cascade decay](#cascade-decay-by-window-stacking-order) below. There's also a "Cascade decay (L1~L4 …)" item you can **click to toggle the whole thing**; off means "all unfocused windows use the min opacity".
+- **Looks & feels like the Windows taskbar volume slider**: thin track + round thumb, filled portion runs all the way to the thumb.
+- **The thumb grows a ring on interaction**: hover, drag-hold, and arrow-key nudges all give clear feedback.
+- Color follows the **system accent color** (light/dark themes each adapt; the selected row has its own palette).
+- The two opacity sliders always step **1%** and always show **integers**; the hover and layer-decay sliders step **0.1** and show **one decimal**.
+- Three ways to adjust: **drag**, **mouse wheel** (±1 step), **left/right arrow keys** (±1 step, best when you want an exact value).
+- **The value and bar track your hand live**; the menu **stays open**; after release you can click another item or click outside to close.
+- **Auto-saved when changed**: written to `%LOCALAPPDATA%\win_glass\config.json`, persists across reboots.
+
+---
+
+### Tray menu enhancements (v1.7.0): right-click to bind shortcuts / multilingual / Win11 rounded corners
+
+#### 1. Bind a global shortcut to a menu item (right-click to record)
+
+Pause, hover toggle, fullscreen toggle, cascade decay, **fade time**, open log, quit — all of these can bind a global shortcut, so a single keypress in any window triggers it, **no need to click the tray**.
+
+| Action | Effect |
+| --- | --- |
+| **Right-click a menu item** | Enter recording: the item's second line becomes "Press a shortcut" |
+| **Press a key or combo and release** | Bind immediately and **auto-save** to config |
+| **Right-click empty menu area / Esc** | Cancel this recording |
+| **Press Delete / Backspace alone while recording** | Unbind the item (same as "not bound") |
+
+Conflicting and invalid keys are **gently rejected** — no crash, no binding a key that won't fire:
+
+- Binding a **modifier by itself / Esc / a mouse button** → "invalid key"
+- The combo is **already taken by another item** → "conflicts with xx", marked in accent color on that item
+- The combo is **taken by the system or another app** (real RegisterHotKey failure) → "registration failed", not written to config
+
+State is fully persisted: shortcuts and language live in `config.json`, restored on reboot.
+
+#### 2. Show the current shortcut after each item
+
+Under the toggle label is a **gray sub-line**: if bound, it shows the combo (e.g. `Ctrl+Alt+P`, with a "right-click to unbind" hint); if not, it shows "right-click to set shortcut" to guide you. One-off hints like conflict/failure are drawn in **accent color** so they're obvious at a glance.
+
+#### 3. Switch UI language anytime
+
+A **"Language" submenu** appears at the bottom of the menu, with **13 built in**: `auto` (follow system UI language), 简体中文, 繁體中文, English, 日本語, 한국어, Deutsch, Français, Русский, العربية, Português, Español, Italiano. Selection applies instantly and persists; all menu/dialog text follows.
+
+#### 4. Auto-adapt Windows 11 rounded corners
+
+The tray menu's border and selection highlight render with Windows 11's rounded-corner style (via `DwmSetWindowAttribute` setting the corner preference on the menu window); on Windows 10 and earlier it degrades gracefully to square corners — **zero cost, harmless**.
+
+---
+
+### Cascade decay (by window stacking order)
+
+**The problem it solves**: with only "focused / unfocused" two tiers, if you have 5 windows open and 4 are unfocused, they're all the same opacity (say 40%) — **no hierarchy between them**, you can't tell which is on top of which, it all blurs together.
+
+**The approach**: number all **ordinary unfocused windows** by Windows' **Z-order** (top to bottom); layer 1 uses "min opacity", each layer after multiplies by "layer decay factor":
+
+```
+input
+  base   = min opacity (slider, default 40%)
+  ratio  = layer decay factor (slider, default 0.70)
+  floor  = floor 5% (a constant in code)
+  layer# = which position this window holds among all "ordinary unfocused windows" (1-based)
+
+output (opacity, integer percent)
+  layer 1 = base
+  layer n = round( layer n−1's already-displayed integer × ratio ), but not below floor
+```
+
+With defaults `base = 40%`, `ratio = 0.70`:
+
+| Layer | Calculation | Result |
+| --- | --- | --- |
+| Layer 1 | start | **40%** |
+| Layer 2 | 40 × 0.7 = 28 | **28%** |
+| Layer 3 | 28 × 0.7 = 19.6 → 20 | **20%** |
+| Layer 4 | 20 × 0.7 = 14 | **14%** |
+| Layer 5 | 14 × 0.7 = 9.8 → 10 | **10%** |
+| Layer 6 | 10 × 0.7 = 7 | **7%** |
+| Layer 7 and below | 7 × 0.7 = 4.9 → but floor 5 | **5%** |
+
+Switching to "focused 90% / unfocused 50%" (drag the unfocused slider to 50%), the four windows become **focused 90% / layer1 50% / layer2 35% / layer3 25%**.
+
+Three things worth stressing:
+
+1. **It recurses on "the previous layer's already-rounded displayed value", not `base × ratio^(n−1)`.** So when you see 28% on screen you can mentally compute the next layer is 19.6→20% — **every layer is verifiable by eye**. The cost is rounding error accumulates down the layers — a **deliberate** trade-off: internal consistency beats "absolutely precise but doesn't match the screen".
+2. **Rounding is true round-half-up**, not the language-default "banker's rounding". Python's built-in `round(24.5)` gives `24`, but here it must be `25`; so `round_half_up()` is implemented by hand.
+3. **Which windows get numbered? Only "ordinary unfocused windows".** Fullscreen / focused / maximized / topmost **don't take a layer number** and don't participate in decay (they have their own higher priority). Especially **topmost windows**: physically they sit very high; if they took a number, everything below would be pushed down a layer while they themselves don't decay — the layering would be unexplainable.
+
+**How layers update on change?** The engine recomputes every round (default **0.15s**) in three passes:
+
+```
+Pass 1  judge each window's state (fullscreen / focused / maximized / topmost),
+        collecting the "ordinary unfocused windows" set
+Pass 2  read the Z-order chain once (GetTopWindow → GW_HWNDNEXT),
+        number the Pass-1 set by Z-order → {window: layer}
+Pass 3  compute each window's target by its "layer number", hand off to easing
+```
+
+Three passes (not one) are required because **a window computed earlier doesn't know how many ordinary unfocused windows sit below it**. All three passes are **read-only** — they write no alpha; only the animation frame writes opacity to the screen. So switching windows, minimizing, or creating a window changes the Z-order, and the next round (≤0.15s) **recomputes the whole chain** and eases to the new values.
+
+Two ways to turn it off: click the "Cascade decay" item in the menu, or `--no-layer-decay` on the command line. Off means all unfocused windows uniformly use "min opacity" (the v1.5.0-and-before behavior).
+
+### The "Fade time…" item in the right-click menu
+
+Click to open a small input box and type **milliseconds**:
+
+| Item | Notes |
+| --- | --- |
+| Range | **1 ~ 5000 ms**, default `500` |
+| When it takes effect | **Immediately** — the running transition reschedules to the new duration, no need to wait for the next switch |
+| Out of range / garbage | Out-of-range auto-clamps to legal range; non-numeric reverts to original; "Cancel" or closing the window makes no change |
+| Persistence | Written to `config.json`'s `fade_ms`, used on next launch |
+
+The input box selects all by default — just type the new number; `Enter` = confirm, `Esc` = cancel.
+
+> Note: slider changes apply to desktop windows **immediately** — by design, what you see is what you get. If you don't want it recorded, launch with `--no-config` and changes only last for this run.
+
+---
+
+## Command-line Arguments
+
+The windowed build has no console, so to see output use the bundled **`win_glass-console.exe`** (same program, with console). Location: `%LOCALAPPDATA%\Programs\win_glass\win_glass-console.exe`
+
+| Argument | Default | Notes |
+| --- | --- | --- |
+| `--inactive-alpha <0.05~0.95>` | `0.40` | Opacity of unfocused windows (also accepts integer percent like `5~95`) |
+| `--active-alpha <0.05~1.0>` | `1.00` | Opacity of focused / maximized / topmost windows (also accepts `5~100`). **Fullscreen is unaffected, always 100%** |
+| `--no-layer-decay` | off | **Disable cascade decay**: all unfocused windows uniformly use "min opacity" (v1.5.0-and-before behavior) |
+| `--layer-decay-ratio <0.1~1.0>` | `0.70` | Layer decay factor: each deeper ordinary unfocused layer multiplies by it (multiplying the **previous layer's rounded displayed value**), floor 5% |
+| `--no-config` | off | **Neither read nor write** config; slider changes only last this run |
+| `--save-config` | off | **Write this run's CLI args to config** then keep running |
+| `--fade-ms <ms>` | config value, default `500` | Transition duration, **1 ~ 5000**; `1` ≈ instant (no animation). Omit to use stored config |
+| `--fps <rate>` | `60` | Animation frame rate |
+| `--scan <sec>` | `0.15` | Focus-change detection interval |
+| `--rescan <sec>` | `0.50` | Full window-list rescan interval |
+| `--exclude <class,..>` | empty | **Extra** window classes to exclude, comma-separated |
+| `--skip-fullscreen` | off | **Fully ignore** fullscreen windows (leave as-is, an escape hatch for fullscreen games). Default is to take over and lock 100% |
+| `--no-skip-fullscreen` | — | **Deprecated**, kept as a no-op for old-script compatibility; use `--skip-fullscreen` |
+| `--skip-foreign-layered` | off | Skip windows that **already use** layered translucency themselves (e.g. Electron apps) |
+| `--no-restore` | off | **Don't** restore opacity on exit (generally don't use) |
+| `--no-tray` | off | Don't create a tray icon (pure CLI) |
+| `--log <path>` | `%LOCALAPPDATA%\win_glass\win_glass.log` | Log file location |
+| `--duration <sec>` | `0` (resident) | Auto-exit and restore after N seconds |
+| `-v`, `--verbose` | off | Print on every state change |
+| `--list` | — | **Only list** current windows and their target opacities, make no changes |
+| `--self-test` | — | Verify the opacity chain with the built-in test window |
+| `--version` | — | Print version |
+| `-h`, `--help` | — | Help |
+
+Common examples:
+
+```bat
+:: make the background a bit fainter
+win_glass-console.exe --inactive-alpha 0.25
+
+:: make transitions faster
+win_glass-console.exe --fade-ms 200
+
+:: see which windows it would take over, before deciding exclusions
+win_glass-console.exe --list
+
+:: exclude some app's windows
+win_glass-console.exe --exclude MyAppClass,AnotherClass
+
+:: run 30s then auto-exit, quick try
+win_glass-console.exe --duration 30
+
+:: try temporarily, no record (slider changes only last this run)
+win_glass-console.exe --no-config --inactive-alpha 0.25
+
+:: no layering, all unfocused windows equally faint
+win_glass-console.exe --no-layer-decay --inactive-alpha 0.4
+
+:: spread the layers more (each layer drops more)
+win_glass-console.exe --layer-decay-ratio 0.5
+
+:: bake this run's settings as defaults
+win_glass-console.exe --save-config --inactive-alpha 0.25 --active-alpha 1.0
+```
+
+---
+
+## How It Works
+
+In one sentence: **add the `WS_EX_LAYERED` extended style to a window, then use `SetLayeredWindowAttributes` to set whole-window alpha**.
+
+```
+① EnumWindows to enumerate all top-level windows
+② Filter out ones that shouldn't move (desktop, taskbar, IME, tooltips…)
+③ Judge state by the priority chain, compute target opacity (see table below)
+④ On state change, start a 500ms easing animation, write alpha per frame
+⑤ On exit, restore alpha and the extended style
+```
+
+### Who counts as "in use": the priority chain
+
+```
+Fullscreen (fixed 100%, unaffected by "max opacity")
+  └─ Focused (foreground window)        → max opacity
+      └─ Maximized IsZoomed()           → max opacity
+          └─ Topmost TOPMOST            → max opacity
+              └─ Hover (cursor on it)   → min + (max − min) × slider factor
+                  └─ Ordinary unfocused → cascade decay: layer 1 = min,
+                                        each layer after = prev layer's rounded value × decay (floor 5%)
+```
+
+Notes:
+
+- **Fullscreen fixed 100%**: movies and games shouldn't be dimmed. This uses an **independent constant** — even if you set "max opacity" to 60%, fullscreen stays 100%.
+- **Maximized / topmost also count as "focused"**: they fill the screen or sit above everything, visually dominating like the focus window, so they follow "max opacity". **Set the max to 80% and the maximized window follows to 80%.**
+- **Cascade decay only affects ordinary unfocused windows**: fullscreen / focused / maximized / topmost **don't take a layer number**. This is mandatory — a topmost window is physically high; if it took a number, everything below would be pushed down a layer while it itself doesn't decay, and the layering becomes unexplainable. In other words: **"treated as focused" windows are neither dimmed by decay nor affect others' layer numbers.**
+- **Maximized ≠ fullscreen** — two independent states. Two things guarantee they don't cross: 1. `IsZoomed()` is a **veto** — a window the user maximized is never fullscreen regardless of its rectangle; 2. the rectangle-cover test leaves a 2px inward slack (different DPI scaling makes a true fullscreen off by a pixel or two). Why this must be written so: Windows **deliberately pushes a maximized window's rectangle past the screen edges** (that invisible resize border); measured `(-8,-8,1928,1088)` vs `(0,0,1920,1080)` — judging only "does the rectangle cover the screen", **every maximized window would be misjudged as fullscreen and locked to 100%**. The `fs_probe.py` forensic script lays these rectangles out side by side.
+- **Hover only brightens, never dims**: only "windows that should have been dimmed" participate. Fullscreen / focused / maximized / topmost are all at max opacity now; applying the same factor would only dim them, so they're excluded entirely.
+- **Fullscreen windows get no extra layered bit**: a本来-opaque fullscreen window set to 100% should do **nothing** — once you add `WS_EX_LAYERED`, DWM's independent flip / hardware overlay optimization is turned off and fullscreen video may drop frames.
+
+A few easy-to-trip pitfalls, all handled by this project:
+
+| Pitfall | Consequence | Handling |
+| --- | --- | --- |
+| 64-bit window handle truncated | `SetWindowLong` fails or crashes | Uniformly use `GetWindowLongPtrW` / `SetWindowLongPtrW`, fall back only on 32-bit |
+| `SetLayeredWindowAttributes` alpha truncated | 255 becomes -1, broken effect | The param is actually a `BYTE`; declared as `DWORD` in ctypes and read from low bits |
+| Added style but no effect | Window unchanged | After first `WS_EX_LAYERED`, add `SetWindowPos(SWP_FRAMECHANGED)`; **first time only** — calling every frame flickers |
+| Electron / Chromium app already uses layering | Overwrites its opacity, can't restore on exit | Before taking over, `GetLayeredWindowAttributes()` records the original; restored on exit; or `--skip-foreign-layered` to skip entirely |
+| Broke a window (black screen, uninteractive) | Affects normal use | On failure mark `failed` and **never retry that window** — never thrash the same window |
+| Hit desktop / taskbar / IME by mistake | System UI turns translucent | Built-in exclusion list (below) |
+| Swapped `WM_MEASUREITEM` / `WM_DRAWITEM` values | Messages still arrive, but you get **another struct**: width/height written into the draw struct's `itemAction/itemState`, and the `rcItem` you read at draw time is garbage from the measure struct → **menu item size never takes effect, the whole item is blank** | The two constants are written together with a comment pinning them (`WM_DRAWITEM=0x2B` / `WM_MEASUREITEM=0x2C`); the `probe_map.py` self-check prints the "message# ↔ struct shape" map directly |
+| Took the `msg.hwnd` in the `MSGF_MENU` callback as the menu window | That `hwnd` **isn't guaranteed to be the menu window** (could be the shell's `SystemUserAdapterWindowClass`); redrawing with it **silently fails**: no error, no failure return, the menu never repaints → "drag the slider and the value doesn't refresh until the pointer leaves" | Only accept a handle whose window class is `#32768`, and verify step-by-step with `FindWindowW` / `WindowFromPoint`; the `menu_live_test.py` regression test uses `BitBlt` pixel diffs to catch this bug |
+
+### How the sliders get into the right-click menu
+
+Win32 popup menus **have no slider control**, and during `TrackPopupMenu` the menu runs its own modal message loop, so ordinary child controls (`msctls_trackbar32`) can't be inserted. So these four sliders are built from "owner-draw + message hook":
+
+| Step | API used | Role |
+| --- | --- | --- |
+| Build item | `InsertMenuItemW` + `MFT_OWNERDRAW` | Reserve a spot in the menu the program draws itself |
+| Size it | `WM_MEASUREITEM` | Tell the system this item is 300×46 (two lines: title + value / track + thumb) |
+| Draw it | `WM_DRAWITEM` | Using the system's `hDC` + `rcItem`, draw yourself: rounded-capsule track, `Ellipse` thumb |
+| Drag | `SetWindowsHookExW(WH_MSGFILTER)` | Hook mouse messages **inside the menu's modal loop** so "drag without closing the menu" works |
+| Live repaint | `RedrawWindow(..., RDW_INVALIDATE \| RDW_UPDATENOW)` | On value change, repaint only this item, don't reopen the menu |
+
+Key points:
+
+- During drag you must **swallow** mouse-down/up messages (set `msg.message = WM_NULL` and `return 1`), or a click closes the menu; but **`WM_MOUSEMOVE` is deliberately not swallowed** — the menu uses it to highlight the item under the cursor, and swallowing it would also kill arrow-key nudges.
+- The wheel delta is in the **high 16 bits of `lParam`** (`wParam` holds cursor coords); reading the wrong field shows as "wheel jumps or doesn't move at all".
+- **Repaint must hit the menu window (class `#32768`)**. The `msg.hwnd` in `MSGF_MENU` **isn't guaranteed to be the menu window** — the first thing you see may be the shell's `SystemUserAdapterWindowClass`; caching it as the menu window sends all repaints to an unrelated window, **no error but never repaints**, symptom: "drag the slider, value and bar don't refresh until the pointer leaves". Fix: only accept `#32768`, and verify step-by-step with `FindWindowW` / `WindowFromPoint` (below).
+- `RedrawWindow(RDW_UPDATENOW)` is more reliable than `InvalidateRect` + `UpdateWindow`: the menu window's `WM_PAINT` has its own rhythm, and `RDW_UPDATENOW` paints **synchronously right now**.
+- The thumb travel is **inset 9px** at both ends (`SLIDER_THUMB_INSET`): without it, at 0% / 100% the round thumb gets clipped by the item edge.
+- Drawing (percent → center) and hit-testing (x → percent) **share the same coordinate function**, or you get "click here, thumb stops there".
+- The system adds some menu padding to the requested width, so the item is a bit wider than requested; height is exact.
+- Percentages in memory and config are **always integers**, not "store a decimal then round for display" — so 1% stepping is structurally guaranteed, no decimal points possible.
+
+**Built-in excluded window classes** (won't be touched):
+
+```
+Progman, WorkerW, Shell_TrayWnd, Shell_SecondaryTrayWnd, SysShadow,
+ForegroundStaging, MultitaskingViewFrame, XamlExplorerHostIslandWindow,
+Windows.UI.Core.CoreWindow, Windows.Internal.Shell.TabProxyWindow,
+ApplicationFrameWindow, TaskListThumbnailWnd, DV2ControlHost,
+tooltips_class32, MsgIMEWindowClass, Default IME, IME,
+NarratorHelperWindow, Windows.UI.Composition.DesktopWindowContentBridge
+```
+
+Also, **fullscreen windows are taken over and locked to 100% by default** — you won't be disturbed while watching a movie or playing a game. If some fullscreen program dislikes being taken over (a few exclusive-fullscreen games/players), use `--skip-fullscreen` to leave them entirely out; the program preserves their opacity and extended style as-is.
+
+---
+
+## FAQ
+
+**Q: Installed but nothing happens?**
+A: First confirm there's an icon in the bottom-right tray (it may be folded into "hidden icons"). Then run `win_glass-console.exe --list` to see if it recognizes your windows. Logs are at `%LOCALAPPDATA%\win_glass\win_glass.log`.
+
+**Q: Some app's window didn't turn translucent?**
+A: Probably it's in the built-in exclusion list, or it's a fullscreen window, or it already uses layered translucency itself. Use `--list` to confirm; if it's an Electron app (VS Code, Discord, etc.), they handle their own translucency — skipping them is **intentional** to avoid fighting each other.
+
+**Q: Taskbar / desktop turned translucent?**
+A: Shouldn't happen (they're in the exclusion list). If you see it, please file an issue with your `--list` output.
+
+**Q: Does it affect performance?**
+A: Not noticeably. It only does two things: low-frequency window enumeration + per-frame property writes during animation. The project's long-run test samples memory and CPU.
+
+**Q: Do slider values persist after adjusting?**
+A: Yes. **Min opacity**, **Max opacity**, **Hover blend factor**, **Fade time**, and the two toggles (**Hover translucency** / **Fullscreen locked 100%**) are all stored in `%LOCALAPPDATA%\win_glass\config.json` (as `inactive_percent` / `active_percent` / `hover_ratio` / `fade_ms` / `hover_enabled` / `fullscreen_lock`), applied automatically on next launch. To try without persisting, launch with `--no-config`.
+
+**Q: Why can't the slider move a tiny bit? I want 41.5%.**
+A: **The two opacity sliders are deliberate**: step is fixed at 1%, values are always integers — also one of this project's design goals. For a finer transition, tune **fade time** rather than percent. But **v1.5.0's "Hover blend factor" slider steps 0.1**, since it's itself a 0~1 decimal factor needing one-decimal precision.
+
+**Q: Slider won't drag / menu closes as soon as I drag?**
+A: If you're using a **third-party shell enhancer** (StartAllBack, ExplorerPatcher, Windhawk, Winstep, etc.), they hook the menu code and may interfere with owner-drawn items. Try once on a clean Windows to locate the cause; logs and `--list` output also help.
+
+**Q: Slider value and bar don't follow my hand, only update after release?**
+A: This was a bug fixed in v1.2.0 (root cause: menu repaint hit the shell's unrelated helper window, silently failing). Make sure you're on **v1.2.0 or later**: right-click tray → Open log, the launch line shows the version.
+
+**Q: Fade time typed but no effect / what if I type 0?**
+A: Legal range is **1 ~ 5000 ms**; out-of-range auto-clamps (typing `0` = `1`, i.e. near-instant). Change takes effect **immediately**, the running transition reschedules to the new duration. Non-numeric reverts to original; "Cancel" makes no change.
+
+**Q: How to fully uninstall?**
+A: Uninstall from Control Panel » Programs and Features, or run `uninstall.exe` in the install dir. Before uninstalling it **politely asks the program to exit** first, restoring all windows, then removes files and registry entries.
+
+**Q: Why no macOS / Linux support?**
+A: The core relies on Windows' `WS_EX_LAYERED` mechanism, which other systems don't have an equivalent for. A similar effect on macOS would need the Accessibility API with high permission barriers — not planned for now.
+
+---
+
+## Known Limitations
+
+- **Windows x64 only** (Windows 10 / 11)
+- Some **exclusive-fullscreen** or **hardware-accelerated self-drawn** programs (some games, players) don't take `WS_EX_LAYERED` — a system limitation
+- If Windows' **Desktop Window Manager (DWM)** is off, the effect may misbehave
+- The built-in exclusion list is empirical; for special apps use `--exclude`
+- Installed to the user dir (no admin needed), so **only affects the current user**; multi-user environments need separate installs
+
+---
+
+## Build from Source
+
+Requires Python 3.10+ and PyInstaller 6.x.
+
+```bat
+:: 1) Run directly (everything but PySide is available; this program uses only the stdlib)
+python win_glass.py --list
+
+:: 2) Package the exe and installer (output in dist\)
+pip install pyinstaller
+python build.py
+```
+
+`build.py` calls PyInstaller with **the interpreter currently running it**, so you don't need to change any paths. To point at another interpreter, set the `WIN_GLASS_PY` environment variable.
+
+Output:
+
+| File | Notes |
+| --- | --- |
+| `dist\win_glass.exe` | Main program: no console window + system tray |
+| `dist\win_glass-console.exe` | Same program, with console, for `--list` / `-v` diagnostics |
+| `dist\win_glass_setup_v1.7.0.exe` | Installer (bundles the above two + icon + uninstaller) |
+
+### Self-check & tests
+
+```bat
+:: verify the opacity chain with the built-in test window
+python win_glass.py --self-test
+
+:: sliders: value / coord mapping / real draw + GetPixel reverse-check of fill edges & thumb shape /
+::           persistence / wheel & click field parsing / numeric input box end-to-end / item-by-item menu check /
+::           cascade decay (recursion / round-half-up / 5% floor / Z-order numbering / fullscreen-max-topmost don't take numbers)
+python slider_test.py
+
+:: hover translucency + priority chain: real desktop + real cursor, writes no alpha
+:: (assert write-call count is 0; on real windows verify fullscreen>focused>maximized>topmost>hover>cascade)
+python hover_live_test.py
+
+:: live repaint regression: while dragging on a menu item, do the value text and bar actually repaint
+:: (BitBlt pixel-diff; swap _redraw_item for a no-op to reproduce the old bug)
+python menu_live_test.py
+
+:: tray menu slider on-device verify: really pop the menu, synthesize mouse drag, screenshot, assert item size & persisted value
+python menu_e2e_test.py
+
+:: end-to-end: really switch window focus, assert opacity changes correctly between 100% and 40%
+python e2e_test.py
+
+:: robustness: param bounds / zero windows / 30s long-run memory & CPU / force-kill restore / tray / graceful exit
+python robustness_test.py
+
+:: installer: full walk in sandbox  install → verify → uninstall → cleanup
+python install_test.py
+
+:: diagnostic script for owner-drawn menus: print "message# ↔ struct shape" map
+python probe_map.py
+
+:: render the slider's 7 states offscreen to PNG, confirm look by eye (no menu pop, no desktop window touched)
+python probe_slider_render.py
+```
+
+Test scripts use "the interpreter running them" and "their own directory", so clone-and-run works.
+
+> `menu_live_test.py` / `menu_e2e_test.py` will **really pop the tray menu once** on your desktop and operate it with **synthesized mouse** (they click outside the menu to close at the end, touching no real window's opacity). `probe_map.py` also briefly pops a menu once.
+>
+> These mouse-moving tests are **best run one at a time**: running them back-to-back occasionally causes a false "menu not popped yet" assertion failure (the scripts now poll for the menu window, but synthesized mouse is still affected by desktop state).
+>
+> Pillow is **optional**: the test assertions themselves use only pure `ctypes` (`GetPixel` / `BitBlt`), and run with or without it; with it installed they additionally save evidence screenshots to `test_out/`. `probe_slider_render.py` needs Pillow to save PNG (`pip install pillow`).
+
+---
+
+## Project Structure
+
+```
+win-glass/
+├── win_glass.py           main program (window enumeration, opacity engine, tray, tray-menu sliders, CLI)
+├── installer.py           installer / uninstaller (packaged as setup exe)
+├── build.py               one-click packaging script
+├── make_icon.py           generate icon.ico
+├── victim_window.py       "victim window" for testing
+├── slider_test.py         slider unit tests (value / mapping / draw / persistence / input parse / numeric box / menu content / hover factor / maximized≠fullscreen)
+├── menu_live_test.py      live repaint regression: does the value & bar actually repaint while dragging
+├── menu_e2e_test.py       tray menu slider on-device verify
+├── e2e_test.py            end-to-end test
+├── robustness_test.py     robustness / usability test
+├── install_test.py        installer sandbox test
+├── hover_live_test.py     hover judgment on real desktop + real cursor (zero side effects)
+├── fs_probe.py            maximized / fullscreen judgment forensics: lay out IsZoomed + window rect + rcMonitor + rcWork
+├── fs_e2e.py              have the packaged exe classify real windows (end-to-end judgment forensics)
+├── check_verinfo.py       read the version resource embedded in the exe, check the three version spots for misses
+├── probe_map.py           owner-drawn menu diagnostic: message# ↔ struct shape
+├── probe_slider_render.py offscreen-render the slider's states to PNG, confirm look by eye
+├── icon.ico               icon
+├── docs/
+│   ├── win_glass_v1.0.1_fix_report.md     v1.0.1 fix report (with root-cause analysis)
+│   ├── win_glass_v1.1.0_slider_report.md  v1.1.0 slider implementation & troubleshooting
+│   ├── win_glass_v1.2.0_slider_report.md  v1.2.0 volume-slider style & "drag doesn't repaint" root cause
+│   ├── win_glass_v1.3.0_hover_report.md   v1.3.0 hover translucency (polling / brighten-only-never-dim)
+│   ├── win_glass_v1.4.0_focus_rules_report.md  v1.4.0 maximized/topmost treated as focused, fullscreen fixed 100%
+│   └── win_glass_v1.4.1_maximized_not_fullscreen_fix.md  v1.4.1 fix "maximized misjudged as fullscreen"
+├── assets/
+│   └── how-it-works.svg   principle diagram
+│   └── how-it-works.en.svg  principle diagram (English)
+├── tools/out/             SHA256 checksums of release artifacts
+└── RELEASE_NOTES.md / CHANGELOG.md
+```
+
+---
+
+## License
+
+**This project ships with no open-source license (All rights reserved).**
+
+This means the code is publicly visible, but by default grants **no** rights to copy, modify, redistribute, or use commercially. If you'd like to release it under an open-source license (e.g. MIT / Apache-2.0), or want to authorize others to use it, please contact the author via an issue.
+
+---
+
+<sub>Author: Naiqey.千鵺 <1609458331@qq.com></sub>
+
+---
+
 # win-glass · Windows 轻量桌面窗口美化工具--让你的壁纸随时可见(≧∇≦)ﾉ
 
 > **让当前正在用的窗口保持清晰，其余窗口自动变半透明。**
@@ -81,7 +636,7 @@ win_glass_setup_v1.7.0.exe --autostart
 | 操作 | 效果 |
 | --- | --- |
 | **左键单击** | 暂停 / 继续（暂停时**所有窗口立刻恢复 100%**） |
-| **右键** | 弹出菜单：暂停、立即恢复、悬停开关、全屏开关、**四个滑块**、**渐隐时间**、**语言**、打开日志、退出 |
+| **右键** | 弹出菜单：暂停、悬停开关、全屏开关、层叠衰减、**四个滑块**、**渐隐时间**、**语言**、打开日志、退出 |
 | **右键某个菜单项** | 进入**快捷键录制**：按下单键或组合键即绑定并自动保存；右键空白处 / Esc 取消 |
 
 托盘图标**不会出现在任务栏，也不会出现在 Alt+Tab 里**，不占地方。
@@ -96,7 +651,6 @@ win_glass_setup_v1.7.0.exe --autostart
 ```
 ┌──────────────────────────────────┐
 │ 暂停（所有窗口恢复 100%）         │
-│ 立即把所有窗口恢复 100%           │
 │ 悬停半透明（未聚焦窗口 → 88%）    │
 │ 全屏窗口固定 100%                 │
 │ 层叠衰减（第 1~4 层 40/28/20/14%）│  ← 点一下开/关
@@ -111,6 +665,8 @@ win_glass_setup_v1.7.0.exe --autostart
 │ ●━━━━━━━━━━━━━○──────────────    │
 ├──────────────────────────────────┤
 │ 渐隐时间…                 500 ms │  ← 点开输入毫秒数
+├──────────────────────────────────┤
+│ 语言（13 种）                     │  ← 选完立刻生效
 ├──────────────────────────────────┤
 │ 打开日志                         │
 │ 退出（还原全部窗口）              │
@@ -144,7 +700,7 @@ win_glass_setup_v1.7.0.exe --autostart
 
 #### 1. 给菜单项绑全局快捷键（右键录制）
 
-暂停、立即恢复、悬停开关、全屏开关、层叠衰减、**渐隐时间**、打开日志、退出——这些项都能绑一个全局快捷键，之后在任意窗口按一下就触发，**不用再点托盘**。
+暂停、悬停开关、全屏开关、层叠衰减、**渐隐时间**、打开日志、退出——这些项都能绑一个全局快捷键，之后在任意窗口按一下就触发，**不用再点托盘**。
 
 | 操作 | 效果 |
 | --- | --- |
