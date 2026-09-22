@@ -22,15 +22,16 @@ hover_live_test.py — 「悬停半透明」在**真实桌面 + 真实光标**�
   最后由一个「写接口计数器」兜底证明：整轮跑下来
   SetLayeredWindowAttributes / SetWindowLongPtr 的调用次数必须为 0。
 
-覆盖（v1.4.0）
+覆盖（v1.4.0；v1.7.1 起含悬停联动压暗）
   A  真实光标 → 顶层窗口（cursor_pos / cursor_root_window 可复现）
-  B  悬停判定：谁参与、谁不参与
+  B  悬停判定：谁被提亮、其余窗口如何被压暗
   B2 真实窗口 + 真实光标：未聚焦被悬停 / 移出回落 / 焦点优先
   C  --move-cursor：临时把光标挪到未聚焦窗口中心（跑完精确还原）
   D  缓动曲线（假 HWND，零 API 写入）
   E  快速切换悬停目标不跳变
-  G  真实窗口的状态判定链：全屏 > 聚焦 > 最大化 > 置顶 > 悬停 > 未聚焦
+  G  真实窗口的状态判定链：全屏 > 聚焦 > 最大化 > 置顶 > 悬停 > 未聚焦（+压暗）
   H  零副作用兜底（写接口调用次数必须为 0）
+  I  悬停联动压暗的纯逻辑：比例公式 / 下限 / 全屏与自身豁免
 
 用法
   python hover_live_test.py                只读光标（不动它）
@@ -62,13 +63,21 @@ def skip(name, why=""):
 INACT, ACT = 40, 100
 HOVER_RATIO = 0.5                # 显式钉在中点，HOVER 才算得名副其实
 HOVER = 70                       # 40 + (100-40) × 0.5
+# v1.7.1 悬停联动压暗：其余窗口 = 基准值 × 比例，比例 = 系数 − 0.3（下限 0.1），
+# 结果再封 5% 绝对下限。本文件系数 0.5 ⇒ 比例 0.2 ⇒ 40%→8%、100%→20%。
+DIM_RATIO = max(0.1, HOVER_RATIO - 0.3)
+
+
+def dim_of(pct):
+    """把某个「基准百分比」按悬停联动比例压暗，套 5% 绝对下限，返回整数百分比。"""
+    return max(5, int(round(pct * DIM_RATIO)))
 
 
 def new_cfg():
     # ⚠️ 显式关掉层叠衰减（v1.6.0 起默认开）：本节只验证**悬停语义**，而层叠
     # 衰减会把「其余未聚焦窗口」的基线从统一的 40% 变成 40/28/20/…，让
-    # 「悬停不波及别的窗口」这类断言失去可比基线。悬停 × 层叠的交互
-    # 由 slider_test.py 的 K 段（纯函数）覆盖，这里保持 v1.5.0 的干净基线。
+    # 「其余窗口被压暗到 base×比例」这类断言失去可比基线。悬停 × 层叠的交互
+    # 由 slider_test.py 的 K 段（纯函数）覆盖，这里保持干净基线。
     #
     # ⚠️ hover_ratio 必须显式给：v1.5.0 把悬停值从"写死的中点"改成了按系数
     # 插值（默认 0.8 ⇒ 88%），而本文件多处断言写的是字面量 HOVER=70。不钉住
@@ -176,16 +185,25 @@ try:
     else:
         skip("光标所在窗口的悬停判定", "光标不在任何受管窗口上")
 
-    others = [h for h, st in eng.states.items()
-              if not st.hover and not st.is_fg and not st.topmost]
-    bad = [(hex(h), round(eng.states[h].dst * 100)) for h in others]
-    check("其余未聚焦窗口保持最低值 %d%%（悬停不波及别的窗口）" % INACT,
-          all(v == INACT for _h, v in bad), "异常 %r" % [b for b in bad if b[1] != INACT][:3])
+    # v1.7.1 悬停联动：悬停生效时，**除被悬停窗口外**的其余受管窗口（含焦点/置顶）
+    # 一起按 base × 比例压暗；没有悬停时各自保持基准值。
+    hvd = eng._hover_hwnd
+    hover_on = bool(hvd and hvd in eng.states)
+    exp_unf = dim_of(INACT) if hover_on else INACT
+    exp_act = dim_of(ACT) if hover_on else ACT
+    bad = [(hex(h), round(st.dst * 100))
+           for h, st in eng.states.items()
+           if h != hvd and not st.is_fg and not st.topmost]
+    check("悬停联动：其余未聚焦窗口 = %d%%%s" %
+          (exp_unf, "（悬停中，按比例压暗）" if hover_on else "（无悬停，基准值）"),
+          all(v == exp_unf for _h, v in bad),
+          "异常 %r" % [b for b in bad if b[1] != exp_unf][:3])
     bad2 = [(hex(h), round(st.dst * 100)) for h, st in eng.states.items()
-            if (st.is_fg or st.topmost)]
-    check("焦点/置顶窗口恒为最高值（悬停绝不压暗它们）",
-          all(v == ACT for _h, v in bad2),
-          "异常 %r" % [b for b in bad2 if b[1] != ACT][:3])
+            if h != hvd and (st.is_fg or st.topmost)]
+    check("悬停联动：焦点/置顶窗口 = %d%%%s" %
+          (exp_act, "（悬停中，一起被压暗）" if hover_on else "（无悬停，最高值）"),
+          all(v == exp_act for _h, v in bad2),
+          "异常 %r" % [b for b in bad2 if b[1] != exp_act][:3])
 
     # ---------------- 2b. 真实窗口 + 真实光标：补齐剩下两个分支 ----------------
     # 上一步受限于"光标此刻正好压在焦点窗口上"，拿不到「未聚焦被悬停」的真实样本。
@@ -214,8 +232,9 @@ try:
                   eng._hover_hwnd == hover_hwnd
                   and abs(st.dst - HOVER / 100.0) < 1e-9 and st.hover,
                   "0x%08X dst=%.0f%% hover=%s" % (hover_hwnd, st.dst * 100, st.hover))
-            check("  其余未聚焦窗口仍是 %d%%（悬停只作用于光标下那一个）" % INACT,
-                  all(abs(s.dst - INACT / 100.0) < 1e-9
+            check("  其余未聚焦窗口被压暗到 %d%%（悬停联动，不再只作用于光标下那一个）"
+                  % dim_of(INACT),
+                  all(abs(s.dst - dim_of(INACT) / 100.0) < 1e-9
                       for h, s in eng.states.items()
                       if h != hover_hwnd and not s.topmost))
             # 假装光标移开 → 悬停清空 → 回落
@@ -261,12 +280,12 @@ try:
                   eng._hover_hwnd == target and abs(st.dst - HOVER / 100.0) < 1e-9,
                   "hover=0x%08X dst=%.0f%%" % (eng._hover_hwnd, st.dst * 100))
             check("  该窗口被标记为悬停态", st.hover)
-            check("  其它未聚焦窗口不受影响",
-                  all(abs(s.dst - INACT / 100.0) < 1e-9
+            check("  其它未聚焦窗口被压暗到 %d%%（悬停联动）" % dim_of(INACT),
+                  all(abs(s.dst - dim_of(INACT) / 100.0) < 1e-9
                       for h, s in eng.states.items()
                       if h != target and not s.is_fg and not s.topmost))
-            check("  焦点/置顶窗口仍不受影响",
-                  all(abs(s.dst - ACT / 100.0) < 1e-9
+            check("  焦点/置顶窗口一起被压暗到 %d%%" % dim_of(ACT),
+                  all(abs(s.dst - dim_of(ACT) / 100.0) < 1e-9
                       for s in eng.states.values() if s.is_fg or s.topmost))
 
             wg.user32.SetCursorPos(orig_pos[0], orig_pos[1])
@@ -338,7 +357,7 @@ try:
           "A=%.0f%% B=%.0f%%" % (fe2.states[fa].dst * 100, fe2.states[fb].dst * 100))
     curv = fe2.states[fa].cur
     check("A 的当前值仍是动画中的中间态（说明是连续曲线而非瞬跳）",
-          INACT / 100.0 - 1e-9 <= curv <= HOVER / 100.0 + 1e-9,
+          dim_of(INACT) / 100.0 - 1e-9 <= curv <= HOVER / 100.0 + 1e-9,
           "cur=%.1f%%" % (curv * 100))
 
     # ---------------- 6. 状态判定表（真实窗口，v1.4.0） ----------------
@@ -360,18 +379,26 @@ try:
                                         zoomed=zoomed, fullscreen=fs,
                                         hover_hwnd=eng._hover_hwnd)
         # 独立期望值（不复用被测函数的分支顺序，只按文档表格手算）
+        hvh = eng._hover_hwnd
         if fs:
             exp, exp_why = 1.0, "全屏"
-        elif is_fg:
-            exp, exp_why = ACT / 100.0, "聚焦"
-        elif zoomed:
-            exp, exp_why = ACT / 100.0, "最大化"
-        elif top:
-            exp, exp_why = ACT / 100.0, "置顶"
-        elif eng._hover_hwnd == hwnd:
-            exp, exp_why = cfg.hover_alpha, "悬停"
         else:
-            exp, exp_why = INACT / 100.0, "未聚焦"
+            if is_fg:
+                base, exp_why = ACT / 100.0, "聚焦"
+            elif zoomed:
+                base, exp_why = ACT / 100.0, "最大化"
+            elif top:
+                base, exp_why = ACT / 100.0, "置顶"
+            elif hvh == hwnd:
+                base, exp_why = cfg.hover_alpha, "悬停"
+            else:
+                base, exp_why = INACT / 100.0, "未聚焦"
+            exp = base
+            # v1.7.1 悬停联动：悬停生效时，非悬停窗口一起被压暗（下限 5%）
+            if hvh and hwnd != hvh:
+                dimmed = max(5 / 100.0, base * cfg.hover_dim_ratio)
+                if dimmed < base:
+                    exp, exp_why = dimmed, exp_why + "·悬停压暗"
         flags = "".join(("F" if fs else "-", "Z" if zoomed else "-",
                          "T" if top else "-"))
         seen_flags.append((flags, why, round(alpha * 100)))
@@ -404,6 +431,36 @@ try:
           and wg.target_for(lo_cfg, 1, zoomed=True)[0] == 0.50
           and wg.target_for(lo_cfg, 1, top=True)[0] == 0.50
           and wg.target_for(lo_cfg, 1, is_fg=True)[0] == 0.50)
+
+    # ---------------- 6b. 悬停联动压暗：纯逻辑（v1.7.1） ----------------
+    print("\nI. 悬停联动压暗（纯逻辑）：比例公式 / 下限 / 全屏与自身豁免")
+    lc = wg.GlassConfig(inactive_alpha=INACT / 100.0, active_alpha=ACT / 100.0,
+                        cfg_path="", layer_decay=False, hover_ratio=0.8)
+    hv = 0xABCD0001
+    check("比例公式：系数 0.8 → 比例 0.5", abs(lc.hover_dim_ratio - 0.5) < 1e-9,
+          "=%.2f" % lc.hover_dim_ratio)
+    lc.hover_ratio = 0.7
+    check("比例公式：系数 0.7 → 比例 0.4（用户例子）", abs(lc.hover_dim_ratio - 0.4) < 1e-9)
+    lc.hover_ratio = 0.2
+    check("比例下限：系数 0.2 → 比例 0.1（封底）", abs(lc.hover_dim_ratio - 0.1) < 1e-9)
+    lc.hover_ratio = 0.0
+    check("比例下限：系数 0.0 → 比例仍 0.1", abs(lc.hover_dim_ratio - 0.1) < 1e-9)
+    lc.hover_ratio = 0.8
+    check("其余聚焦窗口（100% × 0.5）= 50%",
+          abs(wg.target_for(lc, 2, is_fg=True, hover_hwnd=hv)[0] - 0.50) < 1e-9)
+    check("其余未聚焦窗口（40% × 0.5）= 20%",
+          abs(wg.target_for(lc, 3, hover_hwnd=hv)[0] - 0.20) < 1e-9)
+    al, _w, hvf = wg.target_for(lc, hv, hover_hwnd=hv)
+    check("被悬停窗口自身 = 插值中点（只提亮、不压暗）",
+          abs(al - lc.hover_alpha) < 1e-9 and hvf is True)
+    check("全屏窗口恒 100%（不参与压暗）",
+          abs(wg.target_for(lc, 4, fullscreen=True, hover_hwnd=hv)[0] - 1.0) < 1e-9)
+    check("无悬停时一切照旧（其余聚焦窗口 = 100%）",
+          abs(wg.target_for(lc, 2, is_fg=True)[0] - 1.0) < 1e-9)
+    fc = wg.GlassConfig(inactive_alpha=0.08, active_alpha=1.0,
+                        cfg_path="", layer_decay=False, hover_ratio=0.8)
+    check("压暗后绝对下限 5%（8% × 0.5 = 4% → 封到 5%）",
+          abs(wg.target_for(fc, 3, hover_hwnd=hv)[0] - 0.05) < 1e-9)
 
     # ---------------- 7. 零副作用兜底 ----------------
     print("\nH. 零副作用兜底")

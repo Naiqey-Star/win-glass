@@ -34,23 +34,28 @@ win_glass.py — Windows 窗口美化工具：透明度随「全屏 / 聚焦 / �
     python win_glass.py --skip-fullscreen 全屏窗口完全不接管（给全屏游戏留退路）
     python win_glass.py --duration 20     跑 20 秒后自动退出并还原
 
-托盘右键菜单
-    暂停 / 立即恢复 / [全屏窗口固定 100%] / [悬停半透明] /
-    [非聚焦最低透明度] / [聚焦最高透明度] / 渐隐时间… / 打开日志 / 退出
-    三个滑块：范围 5~95% 与 5~100%（步进 1%、显示整数百分比），
-    以及「悬停插值系数」0.0~1.0（步进 0.1、显示一位小数）。
+托盘右键菜单（每项右键可绑全局快捷键，v1.7.0）
+    暂停 / [悬停半透明] / [全屏窗口固定 100%] / [层叠衰减] /
+    [非聚焦最低透明度] / [聚焦最高透明度] / [悬停插值系数] / [层衰减系数] /
+    渐隐时间… / 语言 / 打开日志 / 退出
+    滑块：两个透明度 5~95% 与 5~100%（步进 1%、显示整数百分比），
+    另有「悬停插值系数」0.0~1.0 与「层衰减系数」0.1~1.0（步进 0.1、一位小数）。
     拖动、鼠标滚轮、左右方向键都能调；调完写入
     %LOCALAPPDATA%\\win_glass\\config.json，下次启动自动生效。
 
-悬停半透明（v1.3.0）—— 为什么取「偏低侧偏亮」，为什么有的窗口不参与
-    * 悬停值 = 最低 + (最高 − 最低) × hover_ratio，系数**由菜单里的
+悬停半透明（v1.3.0；v1.7.1 起带「联动压暗」）
+    * 被悬停窗口的值 = 最低 + (最高 − 最低) × hover_ratio，系数**由菜单里的
       「悬停插值系数」滑块实时调节**（0.0~1.0，步进 0.1，默认 0.8）：
       默认 100%/40% ⇒ 88%；拖到 0.5 ⇒ 70%；拖到 0 ⇒ 等于最低值（等于没开）。
-    * 它**只提亮、绝不压暗**：参与者只有「本应被压暗的未聚焦窗口」。
-      全屏/聚焦/最大化/置顶当前都是（或应当是）最高透明度，按同一个比例算反而会
-      把它们压暗 —— 这不是用户按着鼠标想要的，所以一律不参与。
-    * 全局同时最多只有一个「悬停窗口」（鼠标只有一个点），窗口层叠时取最上层
-      的那个 —— 也就是 WindowFromPoint 真正会收到鼠标的窗口。
+    * 「提亮」只作用于**本应被压暗的窗口**：全屏/聚焦/最大化/置顶本就在最高值，
+      按同一个比例算反而会压暗它们 ⇒ 它们不参与提亮。
+    * ⭐ v1.7.1 **联动压暗**：悬停某个窗口时，**其余所有受规则影响的窗口（无论
+      是否聚焦）**一起压暗到「基准值 × 压暗比例」，制造焦点对比：
+          压暗比例 = 悬停插值系数 − 0.3，下限 0.1
+      例：系数 0.7 ⇒ 比例 0.4 ⇒ 一个 100% 的窗口被压到 40%；压暗后绝对下限 5%。
+      全屏窗口恒 100%、不参与；被悬停的那个窗口自身只提亮、不压暗。
+    * 全局同时最多只有一个「悬停窗口」（鼠标只有一个点），取 WindowFromPoint
+      真正会收到鼠标的那个窗口。
     * 悬停目标变了不改动别的东西：新目标从**当前透明度**起缓动，所以鼠标快速
       在多个窗口之间划过时，是一条连续曲线上的折线，不会突跳、也不会互相干扰。
 
@@ -99,7 +104,7 @@ DEFAULT_LOG = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser(
                            "win_glass", "win_glass.log")
 DEFAULT_CFG = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"),
                            "win_glass", "config.json")
-APP_VER = "1.7.0"
+APP_VER = "1.7.1"
 LOG_PATH = DEFAULT_LOG
 CFG_PATH = DEFAULT_CFG
 _IO_LOG_FH = None          # 当前接管的日志文件句柄（用于 --log 覆盖时重开）
@@ -234,6 +239,17 @@ HOVER_RATIO_UNITS = 10
 # 鼠标位置的轮询间隔（秒）。50ms 足够跟手，又几乎不占 CPU：
 # 光标没动的那一轮直接返回，连 WindowFromPoint 都不做。
 DEFAULT_HOVER_INTERVAL = 0.05
+
+# ---- 悬停联动压暗（v1.7.1）----
+# 悬停某个窗口时，除了把被悬停的窗口按系数提亮，还要把**其余**「受透明度规则
+# 影响」的窗口一起压暗，制造焦点对比：
+#     其余窗口目标 = max( 基准值 × HOVER_DIM_RATIO , LAYER_MIN_PCT/100 )
+#     HOVER_DIM_RATIO = 悬停插值系数 − HOVER_DIM_OFFSET，下限 HOVER_DIM_MIN_RATIO
+# 参与范围：「无论是否聚焦」——聚焦 / 最大化 / 置顶 / 未聚焦都算；
+# 唯二例外：全屏窗口恒 100% 不受规则影响，被悬停的那个窗口自己只提亮、
+# 绝不进这条压暗分支。
+HOVER_DIM_OFFSET = 0.3
+HOVER_DIM_MIN_RATIO = 0.1
 
 # ---- 全屏锁定 100%（v1.4.0）----
 # 全屏窗口的目标透明度写死这个值，**不读 active_pct**：
@@ -1189,6 +1205,22 @@ class GlassConfig:
     def hover_alpha(self) -> float:
         return self.hover_pct / 100.0
 
+    # ---- 悬停联动压暗（v1.7.1）----
+    @property
+    def hover_dim_ratio(self) -> float:
+        """悬停联动时「其余窗口」的压暗比例（**乘数**）：
+
+            其余窗口目标 = max(基准值 × hover_dim_ratio, 5%)
+
+        比例 = 悬停插值系数 − HOVER_DIM_OFFSET(0.3)，下限 HOVER_DIM_MIN_RATIO(0.1)。
+        例：悬停系数 0.7 ⇒ 比例 0.4 ⇒ 一个 100% 的窗口被压到 40%。
+
+        ⚠️ 这里夹下限**只夹比例本身**；乘上去之后的绝对下限（5%）由 target_for
+        在算目标值时再封一次。两者不能合并：比例下限保证「至少压一点点」，
+        绝对下限保证「别把窗口压到看不见」。
+        """
+        return max(HOVER_DIM_MIN_RATIO, self._hover_ratio - HOVER_DIM_OFFSET)
+
     # ---- 全屏锁定（v1.4.0）----
     @property
     def fullscreen_lock(self) -> bool:
@@ -1557,28 +1589,45 @@ def target_for(cfg: "GlassConfig", hwnd: int, *, is_fg: bool = False,
                       round_half_up(上一层已取整显示值 × cfg.layer_decay_ratio)，
                       下限 LAYER_MIN_PCT(5%)。关掉就退回「统一 inactive_pct」。
 
-    ②③④ 属于同一组、⑤ 属于另一组：悬停只在"基础目标 = 最低值"的窗口上生效。
-    全屏/聚焦/最大化/置顶当前都是（或应当是）最高透明度，按插值算只会把它们
-    压暗 ⇒ 一律不参与悬停。这样"悬停"在语义上**只会提亮、绝不会压暗**任何窗口。
+    ⑤ 与 ①~④ 的区分：被悬停的那个窗口，若它本应是最高透明度（全屏/聚焦/最大化/
+    置顶），按插值算只会把它压暗 ⇒ 一律不参与"提亮"，保证**提亮永不压暗**。
+
+    ⑦ 是 v1.7.1 新增的**后处理**：先按 ①~⑥ 算出「基准值」，再在悬停生效时把
+    **非悬停窗口**整体乘一个压暗比例。它与 ⑤ 是互补的两件事——⑤ 只提亮"被悬停
+    的那一个"，⑦ 则压暗"其余所有受规则影响的窗口"（无论是否聚焦），制造焦点
+    对比。全屏恒 100% 不参与 ⑦；绝对下限 5% 在 ⑦ 里再封一次。
 
     ⚠️ 参数全部强制关键字（`*`）：以前是位置参数 (is_fg, top, hover_hwnd)，
     现在中间插进了 zoomed/fullscreen —— 保持位置传递会让老调用悄悄错位，
     所以宁可让它直接 TypeError。
     """
     if fullscreen:
-        return cfg.fullscreen_alpha, "全屏", False
-    if is_fg:
-        return cfg.active_alpha, "聚焦", False
-    if zoomed:
-        return cfg.active_alpha, "最大化", False
-    if top:
-        return cfg.active_alpha, "置顶", False
-    if cfg.hover and hover_hwnd and hover_hwnd == hwnd:
-        return cfg.hover_alpha, "悬停", True
-    if cfg.layer_decay and depth >= 1:
-        pct = layer_pct(cfg.inactive_pct, depth, cfg.layer_decay_ratio)
-        return pct / 100.0, "第%d层" % depth, False
-    return cfg.inactive_alpha, "未聚焦", False
+        base, reason, hv = cfg.fullscreen_alpha, "全屏", False
+    elif is_fg:
+        base, reason, hv = cfg.active_alpha, "聚焦", False
+    elif zoomed:
+        base, reason, hv = cfg.active_alpha, "最大化", False
+    elif top:
+        base, reason, hv = cfg.active_alpha, "置顶", False
+    elif cfg.hover and hover_hwnd and hover_hwnd == hwnd:
+        base, reason, hv = cfg.hover_alpha, "悬停", True
+    elif cfg.layer_decay and depth >= 1:
+        base = layer_pct(cfg.inactive_pct, depth, cfg.layer_decay_ratio) / 100.0
+        reason, hv = "第%d层" % depth, False
+    else:
+        base, reason, hv = cfg.inactive_alpha, "未聚焦", False
+
+    # ⑦ 悬停联动压暗（v1.7.1）：悬停某个窗口时，**其余**「受透明度规则影响」的
+    #    窗口（无论是否聚焦：聚焦 / 最大化 / 置顶 / 未聚焦）一起压暗到
+    #    base × hover_dim_ratio，绝对下限 LAYER_MIN_PCT(5%)。
+    #    两个例外：① 全屏恒 100%、不参与任何规则；② 被悬停的窗口本身（hv=True）
+    #    只提亮，绝不压暗自己 —— 所以这里显式排除。dimmed < base 才改，避免
+    #    用户把系数调得极低时反而把窗口"提"上去。
+    if (cfg.hover and hover_hwnd and hwnd != hover_hwnd and not fullscreen):
+        dimmed = max(LAYER_MIN_PCT / 100.0, base * cfg.hover_dim_ratio)
+        if dimmed < base:
+            return dimmed, reason + "·悬停压暗", hv
+    return base, reason, hv
 
 
 # --------------------------------------------------------------------------
@@ -3278,9 +3327,10 @@ class GlassEngine:
                 self._hover_hwnd = 0
         self._dirty.set()
         self.save_cfg(force=True)
-        print("[win_glass] 悬停半透明：%s（未聚焦窗口 %s → %d%%）"
+        print("[win_glass] 悬停半透明：%s（未聚焦窗口 %s → %d%%，其余窗口 ×%.1f）"
               % ("开" if self.cfg.hover else "关",
-                 self.cfg.inactive_pct, self.cfg.hover_pct))
+                 self.cfg.inactive_pct, self.cfg.hover_pct,
+                 self.cfg.hover_dim_ratio))
 
     def set_hover_ratio(self, ratio):
         """改悬停插值比例（0=等于最低，0.8=默认偏向最高，1=等于最高）。"""
@@ -3753,7 +3803,8 @@ class GlassEngine:
         if self.cfg.hover:
             print(f"[win_glass] 悬停半透明：开   未聚焦窗口被鼠标压住时 "
                   f"{self.cfg.inactive_pct}% -> {self.cfg.hover_pct}% "
-                  f"(最高/最低插值 {self.cfg.hover_ratio:.2f})  "
+                  f"(最高/最低插值 {self.cfg.hover_ratio:.2f})；"
+                  f"其余窗口联动 ×{self.cfg.hover_dim_ratio:.1f}  "
                   f"轮询={self.cfg.hover_interval * 1000:.0f}ms")
         else:
             print("[win_glass] 悬停半透明：关")
@@ -3867,8 +3918,10 @@ def list_windows(cfg: GlassConfig):
     if not cfg.fullscreen_lock:
         print("⚠️ 全屏锁定：关 —— 全屏窗口完全不接管（--skip-fullscreen）")
     if cfg.hover:
-        print("悬停半透明：开   未聚焦窗口 → %d%%（插值 %.2f）   此刻悬停=%s"
-              % (cfg.hover_pct, cfg.hover_ratio,
+        print("悬停半透明：开   未聚焦窗口 → %d%%（插值 %.2f）   "
+              "联动压暗：其余窗口 ×%.1f（下限 %d%%）   此刻悬停=%s"
+              % (cfg.hover_pct, cfg.hover_ratio, cfg.hover_dim_ratio,
+                 LAYER_MIN_PCT,
                  ("0x%08X" % hover_hwnd) if hover_hwnd else "无"))
     else:
         print("悬停半透明：关")

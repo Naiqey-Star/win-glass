@@ -58,7 +58,7 @@ When focus changes, opacity transitions smoothly within **500ms (adjustable)** �
 
 ## Download & Install
 
-Download `win_glass_setup_v1.7.0.exe` from the [**Releases page**](../../releases/latest) and double-click.
+Download `win_glass_setup_v1.7.1.exe` from the [**Releases page**](../../releases/latest) and double-click.
 
 | Item | Notes |
 | --- | --- |
@@ -76,7 +76,7 @@ After install, search **win_glass** in the Start menu to launch.
 
 ## Quick Start
 
-1. Double-click `win_glass_setup_v1.7.0.exe` to install
+1. Double-click `win_glass_setup_v1.7.1.exe` to install
 2. Search `win_glass` in the Start menu to launch
 3. A tray icon appears bottom-right → **it's already working**
 4. Click around a few windows: the one you're using stays clear, the rest fade
@@ -84,10 +84,10 @@ After install, search **win_glass** in the Start menu to launch.
 Want it to start at login? Run as a normal (non-admin) user:
 
 ```bat
-win_glass_setup_v1.7.0.exe --autostart
+win_glass_setup_v1.7.1.exe --autostart
 ```
 
-Disable autostart: `win_glass_setup_v1.7.0.exe --no-autostart`
+Disable autostart: `win_glass_setup_v1.7.1.exe --no-autostart`
 
 ---
 
@@ -142,6 +142,7 @@ Adjust opacity, hover factor and cascade decay right in the menu — no commands
 | **Layer decay factor** | What each deeper layer is multiplied by | **0.1 ~ 1.0** | 0.1 | 0.7 |
 
 - **Hover blend factor** (v1.5.0): hover value = `min + (max − min) × factor`. Factor `0.0` = equals the min (visually same as hover off); `0.5` = right in the middle; `1.0` = equals the max. Default `0.8` leans toward "clearer" — the window under the cursor brightens noticeably. Drag it and **the "Hover translucency (→ xx%)" line above updates live** — what you see is what you get.
+- ⭐ **Hover linkage dimming** (v1.7.1): while you hover a window, **every other rule-affected window** (focused / maximized / topmost / unfocused alike) dims at the same time to `base × ratio`, where `ratio = hover factor − 0.3` (floor `0.1`), and the resulting value never drops below **5%**. Example: factor `0.7` → ratio `0.4` → a 100% window goes to 40%. Fullscreen stays 100%; the hovered window itself only brightens, never dims.
 - **Layer decay factor** (v1.6.0): see [Cascade decay](#cascade-decay-by-window-stacking-order) below. There's also a "Cascade decay (L1~L4 …)" item you can **click to toggle the whole thing**; off means "all unfocused windows use the min opacity".
 - **Looks & feels like the Windows taskbar volume slider**: thin track + round thumb, filled portion runs all the way to the thumb.
 - **The thumb grows a ring on interaction**: hover, drag-hold, and arrow-key nudges all give clear feedback.
@@ -185,6 +186,22 @@ A **"Language" submenu** appears at the bottom of the menu, with **13 built in**
 #### 4. Auto-adapt Windows 11 rounded corners
 
 The tray menu's border and selection highlight render with Windows 11's rounded-corner style (via `DwmSetWindowAttribute` setting the corner preference on the menu window); on Windows 10 and earlier it degrades gracefully to square corners — **zero cost, harmless**.
+
+---
+
+### Hover linkage dimming (v1.7.1)
+
+While the cursor hovers a managed window, that window brightens to its hover value and **every other rule-affected window dims together**, so the window under your cursor stands out:
+
+| Item | Rule |
+| --- | --- |
+| Hovered window | `min + (max − min) × hover factor` (brighten only) |
+| Every other window (focused / maximized / topmost / unfocused) | `base × ratio`, where `ratio = hover factor − 0.3`, floored at `0.1` |
+| Absolute floor | **5%** — no dimmed window ever goes below it |
+| Fullscreen | **exempt** — always 100% |
+| The hovered window itself | **never dimmed** |
+
+Example: hover factor `0.7` ⇒ `ratio = 0.4` ⇒ a 100% window goes to 40%, a 40% window to 16% (the deep end floor is 5%). Turn hover off and everything returns to its normal target — no residue.
 
 ---
 
@@ -350,7 +367,7 @@ Notes:
 - **Maximized / topmost also count as "focused"**: they fill the screen or sit above everything, visually dominating like the focus window, so they follow "max opacity". **Set the max to 80% and the maximized window follows to 80%.**
 - **Cascade decay only affects ordinary unfocused windows**: fullscreen / focused / maximized / topmost **don't take a layer number**. This is mandatory — a topmost window is physically high; if it took a number, everything below would be pushed down a layer while it itself doesn't decay, and the layering becomes unexplainable. In other words: **"treated as focused" windows are neither dimmed by decay nor affect others' layer numbers.**
 - **Maximized ≠ fullscreen** — two independent states. Two things guarantee they don't cross: 1. `IsZoomed()` is a **veto** — a window the user maximized is never fullscreen regardless of its rectangle; 2. the rectangle-cover test leaves a 2px inward slack (different DPI scaling makes a true fullscreen off by a pixel or two). Why this must be written so: Windows **deliberately pushes a maximized window's rectangle past the screen edges** (that invisible resize border); measured `(-8,-8,1928,1088)` vs `(0,0,1920,1080)` — judging only "does the rectangle cover the screen", **every maximized window would be misjudged as fullscreen and locked to 100%**. The `fs_probe.py` forensic script lays these rectangles out side by side.
-- **Hover only brightens, never dims**: only "windows that should have been dimmed" participate. Fullscreen / focused / maximized / topmost are all at max opacity now; applying the same factor would only dim them, so they're excluded entirely.
+- **Hover does two things** (v1.7.1): ① the hovered window itself only ever *brightens* — and only if it's one that "should have been dimmed" (fullscreen / focused / maximized / topmost are already at max, so applying the interpolation would only dim them, hence they don't take part in that); ② meanwhile **all other rule-affected windows dim together** to `base × (hover factor − 0.3)`, with the ratio floored at `0.1` and the resulting value floored at `5%`. Fullscreen is exempt from both. Net effect: a focus spotlight — the window under your cursor stands out while everything else recedes.
 - **Fullscreen windows get no extra layered bit**: a本来-opaque fullscreen window set to 100% should do **nothing** — once you add `WS_EX_LAYERED`, DWM's independent flip / hardware overlay optimization is turned off and fullscreen video may drop frames.
 
 A few easy-to-trip pitfalls, all handled by this project:
@@ -472,7 +489,7 @@ Output:
 | --- | --- |
 | `dist\win_glass.exe` | Main program: no console window + system tray |
 | `dist\win_glass-console.exe` | Same program, with console, for `--list` / `-v` diagnostics |
-| `dist\win_glass_setup_v1.7.0.exe` | Installer (bundles the above two + icon + uninstaller) |
+| `dist\win_glass_setup_v1.7.1.exe` | Installer (bundles the above two + icon + uninstaller) |
 
 ### Self-check & tests
 
@@ -616,7 +633,7 @@ This means the code is publicly visible, but by default grants **no** rights to 
 
 ## 下载安装
 
-从 [**Releases 页面**](../../releases/latest) 下载 `win_glass_setup_v1.7.0.exe`，双击即可。
+从 [**Releases 页面**](../../releases/latest) 下载 `win_glass_setup_v1.7.1.exe`，双击即可。
 
 | 项目 | 说明 |
 | --- | --- |
@@ -635,7 +652,7 @@ This means the code is publicly visible, but by default grants **no** rights to 
 
 ## 快速上手
 
-1. 双击 `win_glass_setup_v1.7.0.exe` 完成安装
+1. 双击 `win_glass_setup_v1.7.1.exe` 完成安装
 2. 开始菜单搜索 `win_glass` 启动
 3. 右下角系统托盘出现图标 → **它已经在工作了**
 4. 随手指点几个窗口，你会看到：你正在用的那个是清晰的，其他都变淡了
@@ -643,10 +660,10 @@ This means the code is publicly visible, but by default grants **no** rights to 
 想让它开机自动运行？用管理员以外的普通身份执行：
 
 ```bat
-win_glass_setup_v1.7.0.exe --autostart
+win_glass_setup_v1.7.1.exe --autostart
 ```
 
-取消开机自启：`win_glass_setup_v1.7.0.exe --no-autostart`
+取消开机自启：`win_glass_setup_v1.7.1.exe --no-autostart`
 
 ---
 
@@ -705,6 +722,10 @@ win_glass_setup_v1.7.0.exe --autostart
   系数 `0.0` = 等于最低值（视觉上等于没开悬停），`0.5` = 正好取中间，`1.0` = 等于最高值。
   默认 `0.8` —— 偏向"更接近清晰"那一侧，鼠标压过去的窗口会明显提亮。
   拖动它，**上面那行「悬停半透明（未聚焦窗口 → xx%）」会实时跟着变**，所见即所得。
+- ⭐ **悬停联动压暗**（v1.7.1）：鼠标悬停某个窗口时，**其余所有受透明度规则影响的窗口**
+  （无论是否聚焦：聚焦 / 最大化 / 置顶 / 未聚焦都算）**一起压暗**到 `基准值 × 比例`，
+  `比例 = 悬停插值系数 − 0.3`（下限 `0.1`），压暗后的值不会低于 **5%**。
+  例：系数 `0.7` → 比例 `0.4` → 100% 的窗口压到 40%。全屏恒 100% 不参与；被悬停的那个窗口只提亮、不压暗。
 - **层衰减系数**（v1.6.0）：见下面的[层叠衰减](#层叠衰减按窗口堆叠顺序逐层递减)一节。
   菜单里另有一项「层叠衰减（第 1~4 层 …）」**点一下就能整体开关**，关掉即回到"所有未聚焦窗口统一最低值"。
 - **外观与交互对齐 Windows 任务栏音量条**：细轨道 + 圆形手柄，已填充部分一直连到手柄
@@ -749,6 +770,22 @@ win_glass_setup_v1.7.0.exe --autostart
 #### 4. 自动适配 Windows 11 圆角
 
 托盘菜单的边框和选中高亮块会按 Windows 11 的圆角风格渲染（通过 `DwmSetWindowAttribute` 给菜单窗口设圆角偏好）；在 Windows 10 及更早版本上自动退化为方角，**零成本、无害**。
+
+---
+
+### 悬停联动压暗（v1.7.1）
+
+鼠标悬停某个受管窗口时，该窗口提亮到悬停值，同时**其余所有受规则影响的窗口一起压暗**，让光标下的窗口凸显出来：
+
+| 对象 | 规则 |
+| --- | --- |
+| 被悬停的窗口 | `最低 + (最高 − 最低) × 悬停插值系数`（只提亮） |
+| 其余所有窗口（聚焦 / 最大化 / 置顶 / 未聚焦） | `基准值 × 比例`，`比例 = 悬停插值系数 − 0.3`，下限 `0.1` |
+| 绝对下限 | **5%** —— 被压暗的窗口不会低于它 |
+| 全屏窗口 | **豁免** —— 恒 100% |
+| 被悬停窗口自身 | **绝不压暗** |
+
+例：悬停系数 `0.7` ⇒ 比例 `0.4` ⇒ 100% 的窗口变 40%、40% 的窗口变 16%（深处 5% 封底）。关掉悬停即全部回到各自正常目标，不留残留。
 
 ---
 
@@ -939,8 +976,10 @@ win_glass-console.exe --save-config --inactive-alpha 0.25 --active-alpha 1.0
   为什么必须这么写：Windows 最大化时会**故意把窗口矩形撑到屏幕外面**（那圈看不见的缩放边框），
   实测 `(-8,-8,1928,1088)` 对 `(0,0,1920,1080)` —— 只按"矩形是否盖住屏幕"判，
   **所有最大化窗口都会被误判成全屏**并锁死 100%。取证脚本 `fs_probe.py` 会把这几行矩形摊开对比。
-- **悬停只提亮、绝不压暗**：参与者只有「本应被压暗的未聚焦窗口」。
-  全屏 / 聚焦 / 最大化 / 置顶当前都是最高透明度，按同一个系数算只会把它们压暗，所以一律不参与。
+- **悬停做两件事**（v1.7.1）：① 被悬停的窗口**自身只提亮、绝不压暗**——且只对「本应被压暗的未聚焦窗口」生效，
+  全屏 / 聚焦 / 最大化 / 置顶本就是最高值，按插值算只会把它们压暗，所以不参与提亮；
+  ② 与此同时，**其余所有受规则影响的窗口一起压暗**到 `基准值 × (悬停插值系数 − 0.3)`，比例下限 `0.1`、
+  压暗值下限 `5%`。全屏对两者都豁免。净效果是「焦点聚光灯」：光标下那个窗口突出，其余整体后退。
 - **全屏窗口不额外加分层位**：本来不透明的全屏窗口要设 100%，正确做法是**什么都不做**——
   一旦给它加上 `WS_EX_LAYERED`，DWM 的独立翻转/硬件叠加优化会被关掉，全屏视频可能掉帧。
 
@@ -1077,7 +1116,7 @@ python build.py
 | --- | --- |
 | `dist\win_glass.exe` | 主程序：无控制台窗口 + 系统托盘 |
 | `dist\win_glass-console.exe` | 同样的程序，带控制台，用于 `--list` / `-v` 等诊断 |
-| `dist\win_glass_setup_v1.7.0.exe` | 安装包（内含上面两个 + 图标 + 卸载器） |
+| `dist\win_glass_setup_v1.7.1.exe` | 安装包（内含上面两个 + 图标 + 卸载器） |
 
 ### 自检与测试
 

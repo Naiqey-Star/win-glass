@@ -925,13 +925,13 @@ def test_hover():
     check("轮询间隔下限 0.02s（不给就白烧 CPU）",
           wg.GlassConfig(hover_interval=0.0).hover_interval == 0.02)
 
-    # ---- 判定：谁参与悬停 ----
+    # ---- 判定：谁参与悬停（v1.7.1 起含「联动压暗」）----
     cfg = wg.GlassConfig(inactive_alpha=0.40, active_alpha=1.00)
-    check("焦点窗口不受悬停影响（最高值 + 不标悬停）",
+    check("被悬停的焦点窗口仍是最高值（只提亮、不压暗自己）",
           wg.target_for(cfg, 111, is_fg=True, hover_hwnd=111)
           == (1.0, "聚焦", False),
           repr(wg.target_for(cfg, 111, is_fg=True, hover_hwnd=111)))
-    check("置顶窗口不被悬停压暗（保持最高值）",
+    check("被悬停的置顶窗口保持最高值（自身不压暗）",
           wg.target_for(cfg, 111, top=True, hover_hwnd=111) == (1.0, "置顶", False),
           repr(wg.target_for(cfg, 111, top=True, hover_hwnd=111)))
     a, why, hv = wg.target_for(cfg, 111, hover_hwnd=111)
@@ -946,8 +946,19 @@ def test_hover():
     check("⭐ 同一窗口：系数 0.5 → 70%，系数 0.0 → 等于最低值 40%",
           abs(a5 - 0.70) < 1e-9 and abs(a0 - 0.40) < 1e-9,
           "0.5→%.2f  0.0→%.2f" % (a5, a0))
-    check("悬停的是别人时，自己仍是 40%",
-          wg.target_for(cfg, 111, hover_hwnd=222) == (0.4, "未聚焦", False))
+    # ⭐ v1.7.1 联动压暗：悬停别人时，自己按 base × (系数−0.3) 压暗（默认 0.5）
+    check("悬停的是别人 → 自己被联动压暗到 40%×0.5 = 20%",
+          wg.target_for(cfg, 111, hover_hwnd=222) == (0.2, "未聚焦·悬停压暗", False),
+          repr(wg.target_for(cfg, 111, hover_hwnd=222)))
+    check("悬停别人时，别处的**聚焦**窗口也一起压暗 100%×0.5 = 50%",
+          wg.target_for(cfg, 111, is_fg=True, hover_hwnd=222)
+          == (0.5, "聚焦·悬停压暗", False),
+          repr(wg.target_for(cfg, 111, is_fg=True, hover_hwnd=222)))
+    check("悬停别人时，全屏窗口不参与压暗（恒 100%）",
+          wg.target_for(cfg, 111, fullscreen=True, hover_hwnd=222)[0] == 1.0)
+    check("悬停别人时压暗比例下限 0.1（系数 0.2 ⇒ 仍乘 0.1）",
+          wg.GlassConfig(inactive_alpha=0.40, active_alpha=1.00,
+                         hover_ratio=0.2).hover_dim_ratio == 0.1)
     check("没有任何悬停目标时 → 40%",
           wg.target_for(cfg, 111, hover_hwnd=0) == (0.4, "未聚焦", False))
     off = wg.GlassConfig(inactive_alpha=0.40, active_alpha=1.00, hover=False)

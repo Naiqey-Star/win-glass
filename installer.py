@@ -45,7 +45,7 @@ for _s in (sys.stdout, sys.stderr):
         pass
 
 APP_NAME = "win_glass"
-APP_VER = "1.7.0"
+APP_VER = "1.7.1"
 APP_DESC = "窗口聚焦透明度美化工具（聚焦/最大化/置顶走最高值，全屏固定 100%，悬停系数可调，层叠衰减按 Z 序递推；托盘菜单可右键绑定全局快捷键、自动适配 Win11 圆角、内置 13 种界面语言）"
 PUBLISHER = "Naiqey.千鵺"
 CLIENT_EXE = "win_glass.exe"                 # 窗口化主程序（无控制台，带系统托盘）
