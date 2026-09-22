@@ -28,7 +28,7 @@ win_glass.py — Windows 窗口美化工具：透明度随「全屏 / 聚焦 / �
     python win_glass.py                   常驻运行，Ctrl+C 退出
     python win_glass.py --list            只列出窗口与其目标透明度，不改动
     python win_glass.py --self-test       用自带测试窗口验证透明度链路
-    python win_glass.py --fade-ms 500 --inactive-alpha 0.4
+    python win_glass.py --fade-ms 500 --inactive-alpha 0.4   # 动画时长(ms)
     python win_glass.py --no-hover        关掉「悬停半透明」
     python win_glass.py --hover-ratio 0.8 悬停值取「最低→最高」的 80%（默认）
     python win_glass.py --skip-fullscreen 全屏窗口完全不接管（给全屏游戏留退路）
@@ -37,7 +37,7 @@ win_glass.py — Windows 窗口美化工具：透明度随「全屏 / 聚焦 / �
 托盘右键菜单（每项右键可绑全局快捷键，v1.7.0）
     暂停 / [悬停半透明] / [全屏窗口固定 100%] / [层叠衰减] /
     [非聚焦最低透明度] / [聚焦最高透明度] / [悬停插值系数] / [层衰减系数] /
-    渐隐时间… / 语言 / 打开日志 / 退出
+    动画时长… / 语言 / 打开日志 / 退出
     滑块：两个透明度 5~95% 与 5~100%（步进 1%、显示整数百分比），
     另有「悬停插值系数」0.0~1.0 与「层衰减系数」0.1~1.0（步进 0.1、一位小数）。
     拖动、鼠标滚轮、左右方向键都能调；调完写入
@@ -328,7 +328,7 @@ IDI_APPLICATION = 32512
 CMD_TOGGLE, CMD_RESTORE, CMD_LOG, CMD_QUIT = 1, 2, 3, 4
 # 菜单里的三个滑块（owner-draw，不走 WM_COMMAND 业务逻辑）
 CMD_SLIDE_INACTIVE, CMD_SLIDE_ACTIVE = 10, 11
-# 「渐隐时间…」：普通菜单项，点开弹一个数值输入框
+# 「动画时长…」：普通菜单项，点开弹一个数值输入框
 CMD_FADE_MS = 12
 # 「悬停半透明」：普通菜单项，勾选式开关（v1.3.0）
 CMD_HOVER = 13
@@ -978,7 +978,7 @@ class GlassConfig:
     ACTIVE_MIN_PCT, ACTIVE_MAX_PCT = 5, 100
     # 内置默认值（既没有命令行参数、也没有配置文件时用）
     DEFAULT_INACTIVE_PCT, DEFAULT_ACTIVE_PCT = 40, 100
-    # 渐隐时长（ms）：菜单里「渐隐时间…」可输入，配置文件也能存
+    # 动画时长（ms）：菜单里「动画时长…」可输入，配置文件也能存
     FADE_MIN_MS, FADE_MAX_MS = 1, 5000
     DEFAULT_FADE_MS = 500
     # 悬停插值比例：0=等于最低透明度（等于没开），1=等于最高透明度，0.8=偏向最高值
@@ -1146,7 +1146,7 @@ class GlassConfig:
     def active_alpha(self, v):
         self.active_pct = _to_pct(v)
 
-    # ---- 渐隐时长（FADE_MIN_MS ~ FADE_MAX_MS）----
+    # ---- 动画时长（FADE_MIN_MS ~ FADE_MAX_MS）----
     @property
     def fade_ms(self) -> int:
         return self._fade_ms
@@ -1325,7 +1325,7 @@ class GlassConfig:
 
     @classmethod
     def apply_saved_fade(cls, saved: dict, fade_ms):
-        """渐隐时间：命令行没给就用配置文件里的，再不行落内置默认。
+        """动画时长：命令行没给就用配置文件里的，再不行落内置默认。
 
         单独一个方法、而不是塞进 apply_saved 的返回值，是为了不破坏既有调用方
         （slider_test.py 按 (inactive, active) 二元组断言过）。
@@ -2098,7 +2098,7 @@ class MenuSlider:
 
 
 # --------------------------------------------------------------------------
-# 数值输入框（托盘菜单里「渐隐时间…」点开后弹出）
+# 数值输入框（托盘菜单里「动画时长…」点开后弹出）
 #
 # 为什么手搓而不用 DialogBoxIndirectParam：这里只需要「一个编辑框 + 确定/取消」，
 # 而内存里拼 DLGTEMPLATE（可变长数组 + 对齐）比直接建窗口更难维护。
@@ -2133,7 +2133,7 @@ kernel32.GetLastError.restype = wt.DWORD
 class NumberInputBox:
     """一个小巧的模态数值输入框：说明 + 编辑框 + 单位 + 确定/取消。
 
-        v = NumberInputBox(parent_hwnd, "渐隐时间", "渐隐时长（毫秒）：", "ms",
+        v = NumberInputBox(parent_hwnd, "动画时长", "动画时长（毫秒）：", "ms",
                            500, 1, 5000).show()
         # 点「确定」-> int（已夹紧）；「取消」/ 关窗 -> None
     """
@@ -2503,7 +2503,7 @@ class TrayIcon:
         # ② 滑块
         self._append_sliders(m)
         user32.AppendMenuW(m, MF_SEPARATOR, 0, None)
-        # ③ 渐隐时间（也是两行，可绑快捷键）
+        # ③ 动画时长（也是两行，可绑快捷键）
         self._append_toggle(m, CMD_FADE_MS,
                             "%s\t%d ms" % (cfg.t("fade"), cfg.fade_ms), False)
         # ④ 语言子菜单（普通项 + 打勾，不涉及快捷键）
@@ -3234,9 +3234,13 @@ class TrayIcon:
             self._ask_fade_ms()
 
     def _ask_fade_ms(self):
-        """弹数值输入框改渐隐时长（ms）。取消（返回 None）就什么都不做。"""
+        """弹数值输入框改「动画时长」（ms）。取消（返回 None）就什么都不做。
+
+        v1.7.2：标题/提示/单位改走 cfg.t()，此前写死中文 ⇒ 换语言后这一项不跟着变。
+        """
         cfg = self.engine.cfg
-        v = NumberInputBox(self.hwnd, "渐隐时间", "渐隐时长（毫秒）：", "ms",
+        v = NumberInputBox(self.hwnd, cfg.t("fade_title"), cfg.t("fade_prompt"),
+                           cfg.t("fade_unit"),
                            cfg.fade_ms, cfg.FADE_MIN_MS, cfg.FADE_MAX_MS).show()
         if v is not None:
             self.engine.set_fade_ms(v)
@@ -3288,7 +3292,7 @@ class GlassEngine:
         self.save_cfg()
 
     def set_fade_ms(self, fade_ms):
-        """托盘菜单改渐隐时长后调用。
+        """托盘菜单改动画时长后调用。
 
         除了写配置，还要把**正在进行的缓动**按新时长重排时间轴：
         否则改完要等下一次切换才生效，用户会以为没生效。做法是保持「已完成
@@ -3310,7 +3314,7 @@ class GlassEngine:
         self._dirty.set()
         self.save_cfg(force=True)
         if self.cfg.verbose and self.cfg.fade_ms != old_ms:
-            print(f"[win_glass] 渐隐时长 {old_ms}ms -> {self.cfg.fade_ms}ms")
+            print(f"[win_glass] 动画时长 {old_ms}ms -> {self.cfg.fade_ms}ms")
 
     def set_hover(self, flag):
         """开关「悬停半透明」（托盘菜单 / 测试用）。
@@ -3903,7 +3907,7 @@ def list_windows(cfg: GlassConfig):
     rows.sort(key=lambda r: (-r[3], r[1]))
     print(f"可管理窗口 {len(rows)} 个   未聚焦目标={cfg.inactive_pct}%   "
           f"聚焦/最大化/置顶目标={cfg.active_pct}%   全屏固定=100%   "
-          f"渐隐={cfg.fade_ms}ms")
+          f"动画={cfg.fade_ms}ms")
     print("判定优先级: 全屏(恒 100%，不受最高值设置影响) > 聚焦 > 最大化 > "
           "置顶 > 悬停 > 普通非聚焦(层叠衰减)")
     print("标记 F=全屏 Z=最大化 T=置顶   层=层叠层级(1 起，0=不参与层叠)")
@@ -4144,7 +4148,7 @@ def main() -> int:
     if args.save_config and not args.no_config:
         if cfg.save():
             print("[win_glass] 已写入配置 %s：非聚焦=%d%%  聚焦/最大化/置顶=%d%%"
-                  "  全屏=%s  渐隐=%dms  悬停=%s/%d%%"
+                  "  全屏=%s  动画=%dms  悬停=%s/%d%%"
                   % (CFG_PATH, cfg.inactive_pct, cfg.active_pct,
                      "固定100%" if cfg.fullscreen_lock else "不接管",
                      cfg.fade_ms, "开" if cfg.hover else "关", cfg.hover_pct))

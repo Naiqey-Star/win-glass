@@ -562,10 +562,10 @@ def test_startup_paths():
                                 (r.stderr or b"").decode("utf-8", "replace")[-120:]))
             ok_pct = ("未聚焦目标=%d%%" % ei) in out and \
                 ("聚焦/最大化/置顶目标=%d%%" % ea) in out
-            ok_fade = ("渐隐=%dms" % ef) in out
+            ok_fade = ("动画=%dms" % ef) in out
             check("CLI %s 百分比正确 %d%%/%d%%" % (desc, ei, ea), ok_pct,
                   out.splitlines()[0] if out else "")
-            check("CLI %s 渐隐时长正确 %dms" % (desc, ef), ok_fade,
+            check("CLI %s 动画时长正确 %dms" % (desc, ef), ok_fade,
                   out.splitlines()[0] if out else "")
             check("CLI %s 声明了全屏恒定 100%%" % desc,
                   "全屏固定=100%" in out, out.splitlines()[0] if out else "")
@@ -670,7 +670,7 @@ def test_number_input():
         t = threading.Thread(target=driver, args=(value, action, box), daemon=True)
         t.start()
         try:
-            res = wg.NumberInputBox(0, "渐隐时间", "渐隐时长（毫秒）：", "ms",
+            res = wg.NumberInputBox(0, "动画时长", "动画时长（毫秒）：", "ms",
                                     500, 1, 5000).show()
         finally:
             t.join(timeout=3)

@@ -98,7 +98,7 @@ Daily use only needs the tray icon — no commands to memorize:
 | Action | Effect |
 | --- | --- |
 | **Left click** | Pause / resume (when paused, **all windows snap back to 100%**) |
-| **Right click** | Pop menu: pause, hover toggle, fullscreen toggle, cascade decay, **four sliders**, **fade time**, **language**, open log, quit |
+| **Right click** | Pop menu: pause, hover toggle, fullscreen toggle, cascade decay, **four sliders**, **animation duration**, **language**, open log, quit |
 | **Right-click a menu item** | Enter **shortcut recording**: press a key or combo to bind & auto-save; right-click empty area / Esc cancels |
 
 The tray icon **doesn't appear in the taskbar or Alt+Tab** — it stays out of the way.
@@ -125,7 +125,7 @@ Adjust opacity, hover factor and cascade decay right in the menu — no commands
 │ Layer decay factor           0.7  │  ← 0.1~1.0 step 0.1
 │ ●━━━━━━━━━━━━━○──────────────    │
 ├──────────────────────────────────┤
-│ Fade time…                 500 ms │  ← type milliseconds
+│ Animation duration…        500 ms │  ← type milliseconds
 ├──────────────────────────────────┤
 │ Language (13)                     │  ← applies instantly
 ├──────────────────────────────────┤
@@ -158,7 +158,7 @@ Adjust opacity, hover factor and cascade decay right in the menu — no commands
 
 #### 1. Bind a global shortcut to a menu item (right-click to record)
 
-Pause, hover toggle, fullscreen toggle, cascade decay, **fade time**, open log, quit — all of these can bind a global shortcut, so a single keypress in any window triggers it, **no need to click the tray**.
+Pause, hover toggle, fullscreen toggle, cascade decay, **animation duration**, open log, quit — all of these can bind a global shortcut, so a single keypress in any window triggers it, **no need to click the tray**.
 
 | Action | Effect |
 | --- | --- |
@@ -257,7 +257,7 @@ Three passes (not one) are required because **a window computed earlier doesn't 
 
 Two ways to turn it off: click the "Cascade decay" item in the menu, or `--no-layer-decay` on the command line. Off means all unfocused windows uniformly use "min opacity" (the v1.5.0-and-before behavior).
 
-### The "Fade time…" item in the right-click menu
+### The "Animation duration…" item in the right-click menu
 
 Click to open a small input box and type **milliseconds**:
 
@@ -286,7 +286,7 @@ The windowed build has no console, so to see output use the bundled **`win_glass
 | `--layer-decay-ratio <0.1~1.0>` | `0.70` | Layer decay factor: each deeper ordinary unfocused layer multiplies by it (multiplying the **previous layer's rounded displayed value**), floor 5% |
 | `--no-config` | off | **Neither read nor write** config; slider changes only last this run |
 | `--save-config` | off | **Write this run's CLI args to config** then keep running |
-| `--fade-ms <ms>` | config value, default `500` | Transition duration, **1 ~ 5000**; `1` ≈ instant (no animation). Omit to use stored config |
+| `--fade-ms <ms>` | config value, default `500` | **Animation duration**, **1 ~ 5000**; `1` ≈ instant (no animation). The flag name stays `--fade-ms` for compatibility. Omit to use stored config |
 | `--fps <rate>` | `60` | Animation frame rate |
 | `--scan <sec>` | `0.15` | Focus-change detection interval |
 | `--rescan <sec>` | `0.50` | Full window-list rescan interval |
@@ -436,10 +436,10 @@ A: Shouldn't happen (they're in the exclusion list). If you see it, please file 
 A: Not noticeably. It only does two things: low-frequency window enumeration + per-frame property writes during animation. The project's long-run test samples memory and CPU.
 
 **Q: Do slider values persist after adjusting?**
-A: Yes. **Min opacity**, **Max opacity**, **Hover blend factor**, **Fade time**, and the two toggles (**Hover translucency** / **Fullscreen locked 100%**) are all stored in `%LOCALAPPDATA%\win_glass\config.json` (as `inactive_percent` / `active_percent` / `hover_ratio` / `fade_ms` / `hover_enabled` / `fullscreen_lock`), applied automatically on next launch. To try without persisting, launch with `--no-config`.
+A: Yes. **Min opacity**, **Max opacity**, **Hover blend factor**, **Animation duration**, and the two toggles (**Hover translucency** / **Fullscreen locked 100%**) are all stored in `%LOCALAPPDATA%\win_glass\config.json` (as `inactive_percent` / `active_percent` / `hover_ratio` / `fade_ms` / `hover_enabled` / `fullscreen_lock`), applied automatically on next launch. To try without persisting, launch with `--no-config`.
 
 **Q: Why can't the slider move a tiny bit? I want 41.5%.**
-A: **The two opacity sliders are deliberate**: step is fixed at 1%, values are always integers — also one of this project's design goals. For a finer transition, tune **fade time** rather than percent. But **v1.5.0's "Hover blend factor" slider steps 0.1**, since it's itself a 0~1 decimal factor needing one-decimal precision.
+A: **The two opacity sliders are deliberate**: step is fixed at 1%, values are always integers — also one of this project's design goals. For a finer transition, tune **animation duration** rather than percent. But **v1.5.0's "Hover blend factor" slider steps 0.1**, since it's itself a 0~1 decimal factor needing one-decimal precision.
 
 **Q: Slider won't drag / menu closes as soon as I drag?**
 A: If you're using a **third-party shell enhancer** (StartAllBack, ExplorerPatcher, Windhawk, Winstep, etc.), they hook the menu code and may interfere with owner-drawn items. Try once on a clean Windows to locate the cause; logs and `--list` output also help.
@@ -447,7 +447,7 @@ A: If you're using a **third-party shell enhancer** (StartAllBack, ExplorerPatch
 **Q: Slider value and bar don't follow my hand, only update after release?**
 A: This was a bug fixed in v1.2.0 (root cause: menu repaint hit the shell's unrelated helper window, silently failing). Make sure you're on **v1.2.0 or later**: right-click tray → Open log, the launch line shows the version.
 
-**Q: Fade time typed but no effect / what if I type 0?**
+**Q: Animation duration typed but no effect / what if I type 0?**
 A: Legal range is **1 ~ 5000 ms**; out-of-range auto-clamps (typing `0` = `1`, i.e. near-instant). Change takes effect **immediately**, the running transition reschedules to the new duration. Non-numeric reverts to original; "Cancel" makes no change.
 
 **Q: How to fully uninstall?**
@@ -674,7 +674,7 @@ win_glass_setup_v1.7.1.exe --autostart
 | 操作 | 效果 |
 | --- | --- |
 | **左键单击** | 暂停 / 继续（暂停时**所有窗口立刻恢复 100%**） |
-| **右键** | 弹出菜单：暂停、悬停开关、全屏开关、层叠衰减、**四个滑块**、**渐隐时间**、**语言**、打开日志、退出 |
+| **右键** | 弹出菜单：暂停、悬停开关、全屏开关、层叠衰减、**四个滑块**、**动画时长**、**语言**、打开日志、退出 |
 | **右键某个菜单项** | 进入**快捷键录制**：按下单键或组合键即绑定并自动保存；右键空白处 / Esc 取消 |
 
 托盘图标**不会出现在任务栏，也不会出现在 Alt+Tab 里**，不占地方。
@@ -702,7 +702,7 @@ win_glass_setup_v1.7.1.exe --autostart
 │ 层衰减系数                 0.7   │  ← 0.1 ~ 1.0，步进 0.1
 │ ●━━━━━━━━━━━━━○──────────────    │
 ├──────────────────────────────────┤
-│ 渐隐时间…                 500 ms │  ← 点开输入毫秒数
+│ 动画时长…                 500 ms │  ← 点开输入毫秒数
 ├──────────────────────────────────┤
 │ 语言（13 种）                     │  ← 选完立刻生效
 ├──────────────────────────────────┤
@@ -742,7 +742,7 @@ win_glass_setup_v1.7.1.exe --autostart
 
 #### 1. 给菜单项绑全局快捷键（右键录制）
 
-暂停、悬停开关、全屏开关、层叠衰减、**渐隐时间**、打开日志、退出——这些项都能绑一个全局快捷键，之后在任意窗口按一下就触发，**不用再点托盘**。
+暂停、悬停开关、全屏开关、层叠衰减、**动画时长**、打开日志、退出——这些项都能绑一个全局快捷键，之后在任意窗口按一下就触发，**不用再点托盘**。
 
 | 操作 | 效果 |
 | --- | --- |
@@ -854,7 +854,7 @@ win_glass_setup_v1.7.1.exe --autostart
 关掉它有两个办法：菜单里点「层叠衰减」那一项，或者命令行 `--no-layer-decay`。
 关掉后所有未聚焦窗口统一用「非聚焦最低透明度」（即 v1.5.0 及以前的行为）。
 
-### 右键菜单里的「渐隐时间…」
+### 右键菜单里的「动画时长…」
 
 点开是一个小输入框，直接填**毫秒数**：
 
@@ -885,7 +885,7 @@ win_glass_setup_v1.7.1.exe --autostart
 | `--layer-decay-ratio <0.1~1.0>` | `0.70` | 层衰减系数：普通未聚焦窗口每往下一层就乘一次它（乘的是**上一层取整后的显示值**），下限 5% |
 | `--no-config` | 关 | **既不读也不写**配置文件，滑块改动只在本次运行有效 |
 | `--save-config` | 关 | 把本次命令行参数**写入配置文件**后继续运行 |
-| `--fade-ms <毫秒>` | 配置文件里的值，默认 `500` | 渐变时长，**1 ~ 5000**；设 `1` 近似立刻生效（无动画感）。不给就用配置文件里存的 |
+| `--fade-ms <毫秒>` | 配置文件里的值，默认 `500` | 动画时长，**1 ~ 5000**；设 `1` 近似立刻生效（无动画感）。参数名保留 `--fade-ms`（向后兼容）。不给就用配置文件里存的 |
 | `--fps <帧率>` | `60` | 动画帧率 |
 | `--scan <秒>` | `0.15` | 焦点变化检测间隔 |
 | `--rescan <秒>` | `0.50` | 窗口列表全量重扫间隔 |
@@ -1057,14 +1057,14 @@ A：不应该发生（它们在排除清单里）。如果遇到请提 issue，�
 A：不会明显影响。它只做两件事：低频枚举窗口 + 动画期间按帧写一个属性。项目自带的长跑测试会采样内存与 CPU。
 
 **Q：右键菜单里的滑块，调完的值会自己记住吗？**
-A：会。**非聚焦最低透明度**、**聚焦最高透明度**、**悬停插值系数**、**渐隐时间**、
+A：会。**非聚焦最低透明度**、**聚焦最高透明度**、**悬停插值系数**、**动画时长**、
 以及两个勾选开关（**悬停半透明** / **全屏窗口固定 100%**）都存在
 `%LOCALAPPDATA%\win_glass\config.json`（分别是 `inactive_percent` / `active_percent` /
 `hover_ratio` / `fade_ms` / `hover_enabled` / `fullscreen_lock`），下次启动自动生效。
 想临时试一下不落盘，用 `--no-config` 启动。
 
 **Q：滑块为什么不能拖一点点？我想要 41.5%。**
-A：**两个透明度滑块是故意的**：步进固定 1%、取值恒为整数——这也是本项目的设计目标之一。想要更精细的过渡，调**渐隐时间**比调百分比更有效。
+A：**两个透明度滑块是故意的**：步进固定 1%、取值恒为整数——这也是本项目的设计目标之一。想要更精细的过渡，调**动画时长**比调百分比更有效。
 不过 **v1.5.0 的「悬停插值系数」滑块是 0.1 步进**，因为它本身就是一个 0~1 的小数系数，需要一位小数精度。
 
 **Q：滑块拖不动 / 菜单一拖就关？**
@@ -1073,7 +1073,7 @@ A：如果你在用**第三方外壳增强工具**（StartAllBack、ExplorerPatc
 **Q：滑块上的数值和进度条不跟着手走，松开鼠标才更新？**
 A：这是 v1.2.0 修掉的一个 bug（根因：菜单重绘打在了 shell 的无关辅助窗口上，静默失败）。请确认你装的是 **v1.2.0 或更新**版本：托盘右键 → 打开日志，启动那行会写明版本号。
 
-**Q：渐隐时间填了没反应 / 填 0 会怎样？**
+**Q：动画时长填了没反应 / 填 0 会怎样？**
 A：合法范围是 **1 ~ 5000 ms**，越界会自动夹紧（填 `0` 等于 `1`，也就是几乎瞬间生效）。改完**立即生效**，正在跑的过渡会按新时长重排。填非数字会退回原值，点「取消」不做任何改动。
 
 **Q：怎么彻底卸载？**
